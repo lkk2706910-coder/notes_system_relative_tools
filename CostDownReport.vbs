@@ -190,40 +190,29 @@ Function ItemText(d, fld)
   ItemText = it.Text
 End Function
 
-' 讀數值欄位；非數字回 0
+' 讀數值欄位；非數字回 0（走 NotesItem.Text，去掉千分位逗號後 CDbl）
 Function ItemNumber(d, fld)
   ItemNumber = 0
-  If Not d.HasItem(fld) Then Exit Function
-  Dim it : Set it = d.GetFirstItem(fld)
-  If it Is Nothing Then Exit Function
+  Dim s : s = ItemText(d, fld)
+  If Trim(s) = "" Then Exit Function
+  s = Replace(s, ",", "")
   On Error Resume Next
-  Dim v : v = it.Values
+  Dim x : x = CDbl(s)
+  If Err.Number = 0 Then ItemNumber = x
+  Err.Clear
   On Error Goto 0
-  If IsArray(v) Then
-    If UBound(v) >= 0 Then
-      If IsNumeric(v(0)) Then ItemNumber = CDbl(v(0))
-    End If
-  ElseIf IsNumeric(v) Then
-    ItemNumber = CDbl(v)
-  End If
 End Function
 
-' 讀日期欄位；欄位不存在或值不是日期回 Empty
+' 讀日期欄位；欄位不存在或值不是日期回 Empty（走 NotesItem.Text，避開物件轉型）
 Function ItemDate(d, fld)
   ItemDate = Empty
-  If Not d.HasItem(fld) Then Exit Function
-  Dim it : Set it = d.GetFirstItem(fld)
-  If it Is Nothing Then Exit Function
+  Dim s : s = ItemText(d, fld)
+  If Trim(s) = "" Then Exit Function
   On Error Resume Next
-  Dim v : v = it.Values
+  Dim x : x = CDate(s)
+  If Err.Number = 0 Then ItemDate = x
+  Err.Clear
   On Error Goto 0
-  If IsArray(v) Then
-    If UBound(v) >= 0 Then
-      If IsDate(v(0)) Then ItemDate = CDate(v(0))
-    End If
-  ElseIf IsDate(v) Then
-    ItemDate = CDate(v)
-  End If
 End Function
 
 Function FmtDate(d)

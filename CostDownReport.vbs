@@ -159,7 +159,10 @@ For mi = 0 To UBound(monthKeys)
     Dim r : Set r = rows(ri)
     Dim linkUrl : linkUrl = "notes://" & SERVER & "/" & replicaID & "/0/" & r("unid")
     html = html & "<tr>" & _
-      "<td style='border:1px solid #aac;'><a href=""" & linkUrl & """>" & Esc(r("project_id")) & "</a></td>" & _
+      "<td style='border:1px solid #aac;padding:4px 8px;white-space:nowrap;'>" & _
+        "<a href=""" & linkUrl & """ title='Open in Notes' style='text-decoration:none;'>📄</a> " & _
+        Esc(r("project_id")) & _
+      "</td>" & _
       Td(r("section")) & Td(r("cost_pool")) & Td(r("eqp_type")) & _
       Td(r("project_desc")) & Td(r("method")) & Td(r("forecast_dt")) & _
       TdN(r("monthly")) & TdN(r("total")) & _

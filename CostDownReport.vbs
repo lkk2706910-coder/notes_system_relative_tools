@@ -29,6 +29,7 @@ Const F_TOTAL        = "Month_Total"
 Const F_ACTUAL_DT    = "Actual_Date_Final"    ' 需為空才保留
 Const F_STATUS       = "Status"               ' 額外篩選欄
 Const STATUS_LIKE    = "New Project%"         ' 對 Status 的比對樣式；% 為萬用字元(任意字串)；留空＝不套用
+Const F_STATION_T11  = "Station Time11"       ' 值格式如 "11^New Project - Approved^07/24/2026 16:25^^^"，取第 3 段的日期部分
 
 ' --- 寄信 ---
 Const MAIL_TO      = "bo_hsiang_kao@umc.com"          ' 收件人，多人分號分隔
@@ -119,6 +120,7 @@ Do While Not (doc Is Nothing)
       rec.Add "forecast_dt",  FmtDate(fd)
       rec.Add "monthly",      ItemNumber(doc, F_MONTHLY)
       rec.Add "total",        ItemNumber(doc, F_TOTAL)
+      rec.Add "approve_date", ExtractApproveDate(ItemText(doc, F_STATION_T11))
       rec.Add "sortkey",      CDbl(Year(fd)) * 10000 + Month(fd) * 100 + Day(fd)
       groups(mkey).Add rec
       kept = kept + 1
@@ -148,7 +150,7 @@ For mi = 0 To UBound(monthKeys)
   html = html & "<table cellspacing='0' cellpadding='5' style='border-collapse:collapse;font-size:13px;border:1px solid #aac;'>"
   html = html & "<thead><tr style='background:#f2f5f9;color:#1f3b57;'>" & _
                 Th("Project ID") & Th("SEC") & Th("Cost Pool") & Th("EQP Type") & Th("Project Desc.") & _
-                Th("Method") & Th("Benefit Occur (Forecast)") & Th("Monthly Benefit") & Th("Total Benefit (Forecast)") & _
+                Th("Method") & Th("Benefit Occur (Forecast)") & Th("Monthly Benefit") & Th("Total Benefit (Forecast)") & Th("Approve Date") & _
                 "</tr></thead><tbody>"
 
   Dim rows : rows = SortRowsBySortKey(groups(mk))
@@ -158,7 +160,7 @@ For mi = 0 To UBound(monthKeys)
     html = html & "<tr>" & _
       Td(r("project_id")) & Td(r("section")) & Td(r("cost_pool")) & Td(r("eqp_type")) & _
       Td(r("project_desc")) & Td(r("method")) & Td(r("forecast_dt")) & _
-      TdN(r("monthly")) & TdN(r("total")) & _
+      TdN(r("monthly")) & TdN(r("total")) & Td(r("approve_date")) & _
       "</tr>"
   Next
   html = html & "</tbody></table>"
@@ -227,6 +229,21 @@ End Function
 Function FmtNum(n)
   If Not IsNumeric(n) Then FmtNum = CStr(n & "") : Exit Function
   FmtNum = FormatNumber(n, 0, -1, 0, -1)   ' 0 小數位、含千分位
+End Function
+
+' 從 Station Time11 抽出核准日期：以 ^ 拆，取第 3 段的第一個空白前字串
+' 例："11^New Project - Approved^07/24/2026 16:25^^^" -> "07/24/2026"
+Function ExtractApproveDate(raw)
+  ExtractApproveDate = ""
+  Dim s : s = Trim(CStr(raw & ""))
+  If s = "" Then Exit Function
+  Dim parts : parts = Split(s, "^")
+  If UBound(parts) < 2 Then Exit Function
+  Dim dp : dp = Trim(parts(2))
+  If dp = "" Then Exit Function
+  Dim sp : sp = InStr(dp, " ")
+  If sp > 0 Then dp = Left(dp, sp - 1)
+  ExtractApproveDate = dp
 End Function
 
 ' 三元運算輔助（VBScript 沒有內建 IIf）

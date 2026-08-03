@@ -86,6 +86,7 @@ WScript.Echo "開始掃描檢視 " & VIEWNAME & " …"
 
 Dim scanned : scanned = 0
 Dim kept : kept = 0
+Dim dbgDumped : dbgDumped = False
 
 Dim doc : Set doc = view.GetFirstDocument()
 Do While Not (doc Is Nothing)
@@ -120,7 +121,29 @@ Do While Not (doc Is Nothing)
       rec.Add "forecast_dt",  FmtDate(fd)
       rec.Add "monthly",      ItemNumber(doc, F_MONTHLY)
       rec.Add "total",        ItemNumber(doc, F_TOTAL)
-      rec.Add "approve_date", ExtractApproveDate(ItemText(doc, F_STATION_T11))
+      Dim rawT11 : rawT11 = ItemText(doc, F_STATION_T11)
+      rec.Add "approve_date", ExtractApproveDate(rawT11)
+
+      ' 第一筆保留的文件：印出 item 名字含 "time"/"station" 的欄位，方便對 F_STATION_T11
+      If Not dbgDumped Then
+        dbgDumped = True
+        WScript.Echo ""
+        WScript.Echo "  [DEBUG] 首筆保留文件 " & pid & _
+                     " HasItem(""" & F_STATION_T11 & """)=" & doc.HasItem(F_STATION_T11) & _
+                     " raw={" & rawT11 & "}"
+        Dim dbgItems : dbgItems = doc.Items
+        Dim dbgIt
+        For Each dbgIt In dbgItems
+          Dim nm : nm = LCase(dbgIt.Name)
+          If InStr(nm, "time") > 0 Or InStr(nm, "station") > 0 Or InStr(nm, "approve") > 0 Then
+            Dim tx : tx = ""
+            On Error Resume Next
+            tx = dbgIt.Text
+            On Error Goto 0
+            WScript.Echo "  [DEBUG]   item name=[" & dbgIt.Name & "] text=[" & Left(tx, 300) & "]"
+          End If
+        Next
+      End If
       rec.Add "sortkey",      CDbl(Year(fd)) * 10000 + Month(fd) * 100 + Day(fd)
       groups(mkey).Add rec
       kept = kept + 1

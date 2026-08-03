@@ -231,19 +231,56 @@ Function FmtNum(n)
   FmtNum = FormatNumber(n, 0, -1, 0, -1)   ' 0 小數位、含千分位
 End Function
 
-' 從 Station Time11 抽出核准日期：以 ^ 拆，取第 3 段的第一個空白前字串
-' 例："11^New Project - Approved^07/24/2026 16:25^^^" -> "07/24/2026"
+' 從 Station Time11 抽出核准日期。以 ^ 拆，掃描每段開頭是否為 MM/DD/YYYY，
+' 收集所有合法日期，回傳「最早」那一個 (格式 MM/DD/YYYY，補零)。
+' 例1："11^New Project - Approved^07/24/2026 16:25^^^"                              -> "07/24/2026"
+' 例2："11^New Project - Approved^07/24/2026 14:00^07/27/2026 11:18^2,157.3^"       -> "07/24/2026"
 Function ExtractApproveDate(raw)
   ExtractApproveDate = ""
   Dim s : s = Trim(CStr(raw & ""))
   If s = "" Then Exit Function
   Dim parts : parts = Split(s, "^")
-  If UBound(parts) < 2 Then Exit Function
-  Dim dp : dp = Trim(parts(2))
-  If dp = "" Then Exit Function
-  Dim sp : sp = InStr(dp, " ")
-  If sp > 0 Then dp = Left(dp, sp - 1)
-  ExtractApproveDate = dp
+  Dim earliest, haveDate : haveDate = False
+  Dim i, seg, dp, sp, d
+  For i = 0 To UBound(parts)
+    seg = Trim(parts(i))
+    If seg <> "" Then
+      sp = InStr(seg, " ")
+      If sp > 0 Then dp = Left(seg, sp - 1) Else dp = seg
+      d = ParseMdy(dp)
+      If Not IsEmpty(d) Then
+        If (Not haveDate) Or (d < earliest) Then
+          earliest = d
+          haveDate = True
+        End If
+      End If
+    End If
+  Next
+  If haveDate Then
+    ExtractApproveDate = Right("0" & Month(earliest), 2) & "/" & _
+                        Right("0" & Day(earliest), 2) & "/" & _
+                        Right("0000" & Year(earliest), 4)
+  End If
+End Function
+
+' 解析 "MM/DD/YYYY" 字串為日期；不合格式或超出範圍回 Empty
+Function ParseMdy(s)
+  ParseMdy = Empty
+  Dim parts : parts = Split(s, "/")
+  If UBound(parts) <> 2 Then Exit Function
+  If Not IsNumeric(parts(0)) Then Exit Function
+  If Not IsNumeric(parts(1)) Then Exit Function
+  If Not IsNumeric(parts(2)) Then Exit Function
+  Dim m : m = CInt(parts(0))
+  Dim dd : dd = CInt(parts(1))
+  Dim y : y = CInt(parts(2))
+  If m < 1 Or m > 12 Then Exit Function
+  If dd < 1 Or dd > 31 Then Exit Function
+  If y < 1900 Or y > 2999 Then Exit Function
+  On Error Resume Next
+  ParseMdy = DateSerial(y, m, dd)
+  If Err.Number <> 0 Then ParseMdy = Empty : Err.Clear
+  On Error Goto 0
 End Function
 
 ' 三元運算輔助（VBScript 沒有內建 IIf）

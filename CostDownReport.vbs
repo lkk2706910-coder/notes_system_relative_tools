@@ -76,8 +76,6 @@ If view Is Nothing Then
   WScript.Quit 5
 End If
 
-Dim replicaID : replicaID = db.ReplicaID
-
 ' ---------- 掃描並收集 ----------
 ' groups: Dictionary key=YYYY/MM -> ArrayList of Dictionary(欄位->值)
 Dim groups : Set groups = CreateObject("Scripting.Dictionary")
@@ -100,18 +98,19 @@ Do While Not (doc Is Nothing)
   If Not seenNoteIDs.Exists(nid) Then
     seenNoteIDs.Add nid, True
 
+    Dim pid : pid = Trim(ItemText(doc, F_PROJECT_ID))
     Dim fd : fd = ItemDate(doc, F_FORECAST_DT)
     Dim ad : ad = ItemDate(doc, F_ACTUAL_DT)
     Dim stVal : stVal = ItemText(doc, F_STATUS)
 
-    ' 保留條件：Forecast_Rls_Date 有值 AND Actual_Date_Final 無值 AND Status 符合 STATUS_LIKE
-    If (Not IsEmpty(fd)) And IsEmpty(ad) And LikeMatchPct(stVal, STATUS_LIKE) Then
+    ' 保留條件：Project_ID 有值 AND Forecast_Rls_Date 有值 AND Actual_Date_Final 無值 AND Status 符合 STATUS_LIKE
+    If pid <> "" And (Not IsEmpty(fd)) And IsEmpty(ad) And LikeMatchPct(stVal, STATUS_LIKE) Then
       Dim mkey : mkey = FmtMonth(fd)
       If Not groups.Exists(mkey) Then _
         groups.Add mkey, CreateObject("System.Collections.ArrayList")
 
       Dim rec : Set rec = CreateObject("Scripting.Dictionary")
-      rec.Add "project_id",   ItemText(doc, F_PROJECT_ID)
+      rec.Add "project_id",   pid
       rec.Add "section",      ItemText(doc, F_SECTION)
       rec.Add "cost_pool",    ItemText(doc, F_COST_POOL)
       rec.Add "eqp_type",     ItemText(doc, F_EQP_TYPE)
@@ -120,7 +119,6 @@ Do While Not (doc Is Nothing)
       rec.Add "forecast_dt",  FmtDate(fd)
       rec.Add "monthly",      ItemNumber(doc, F_MONTHLY)
       rec.Add "total",        ItemNumber(doc, F_TOTAL)
-      rec.Add "unid",         doc.UniversalID
       rec.Add "sortkey",      CDbl(Year(fd)) * 10000 + Month(fd) * 100 + Day(fd)
       groups(mkey).Add rec
       kept = kept + 1
@@ -157,13 +155,8 @@ For mi = 0 To UBound(monthKeys)
   Dim ri
   For ri = 0 To UBound(rows)
     Dim r : Set r = rows(ri)
-    Dim linkUrl : linkUrl = "notes://" & SERVER & "/" & replicaID & "/0/" & r("unid")
     html = html & "<tr>" & _
-      "<td style='border:1px solid #aac;padding:4px 8px;white-space:nowrap;'>" & _
-        "<a href=""" & linkUrl & """ title='Open in Notes' style='text-decoration:none;'>📄</a> " & _
-        Esc(r("project_id")) & _
-      "</td>" & _
-      Td(r("section")) & Td(r("cost_pool")) & Td(r("eqp_type")) & _
+      Td(r("project_id")) & Td(r("section")) & Td(r("cost_pool")) & Td(r("eqp_type")) & _
       Td(r("project_desc")) & Td(r("method")) & Td(r("forecast_dt")) & _
       TdN(r("monthly")) & TdN(r("total")) & _
       "</tr>"
@@ -286,15 +279,14 @@ Function HtmlHeader(scannedCount, keptCount, monthCount)
     "<h2 style='margin:0 0 6px;color:#1f3b57;'>Cost Down Project 預估報表</h2>" & _
     "<p style='color:#667;font-size:12px;margin:0 0 10px;'>" & _
     "來源：<b>" & Esc(SERVER) & "</b> !! <b>" & Esc(DBFILE) & "</b> → <b>" & Esc(VIEWNAME) & "</b><br>" & _
-    "篩選：<code>Forecast_Rls_Date</code> 有值 且 <code>Actual_Date_Final</code> 無值" & _
+    "篩選：<code>Project_ID</code> 有值 且 <code>Forecast_Rls_Date</code> 有值 且 <code>Actual_Date_Final</code> 無值" & _
     IIf(STATUS_LIKE <> "", " 且 <code>Status</code> LIKE '<b>" & Esc(STATUS_LIKE) & "</b>'", "") & "<br>" & _
     "掃描 " & scannedCount & " 筆文件，保留 <b>" & keptCount & "</b> 筆，依 Forecast_Rls_Date 月份分成 <b>" & monthCount & "</b> 組。</p>"
 End Function
 
 Function HtmlFooter()
   HtmlFooter = "<p style='color:#999;font-size:11px;margin-top:16px;'>本信由 CostDownReport.vbs 自動產生（" & _
-               FmtDate(Now) & " " & Right("0" & Hour(Now), 2) & ":" & Right("0" & Minute(Now), 2) & "）。" & _
-               "Project ID 為 Notes 文件連結，可點擊回原文件。</p></body></html>"
+               FmtDate(Now) & " " & Right("0" & Hour(Now), 2) & ":" & Right("0" & Minute(Now), 2) & "）。</p></body></html>"
 End Function
 
 ' 傳回排序後的月份鍵陣列（字典序＝時間序，因為格式 YYYY/MM）

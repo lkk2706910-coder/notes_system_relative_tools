@@ -311,7 +311,7 @@ Function SortedKeys(dict)
   SortedKeys = arr
 End Function
 
-' 依每筆的 sortkey 排序 ArrayList of Dictionary，回 Variant 陣列
+' 依「SEC 升冪 → 相同 SEC 內再按日期(sortkey)升冪」排序 ArrayList of Dictionary，回 Variant 陣列
 Function SortRowsBySortKey(list)
   If list.Count = 0 Then
     SortRowsBySortKey = Array() : Exit Function
@@ -322,16 +322,29 @@ Function SortRowsBySortKey(list)
   For Each r In list
     Set arr(i) = r : i = i + 1
   Next
-  Dim a, b
-  Dim tmp
+  Dim a, b, tmp
   For a = 0 To UBound(arr) - 1
     For b = 0 To UBound(arr) - 1 - a
-      If arr(b)("sortkey") > arr(b + 1)("sortkey") Then
+      If RowCmp(arr(b), arr(b + 1)) > 0 Then
         Set tmp = arr(b) : Set arr(b) = arr(b + 1) : Set arr(b + 1) = tmp
       End If
     Next
   Next
   SortRowsBySortKey = arr
+End Function
+
+' 比較兩筆：先按 SEC (不分大小寫，空字串排最後)、再按 sortkey (日期)
+Function RowCmp(x, y)
+  Dim sx : sx = LCase(Trim(CStr(x("section") & "")))
+  Dim sy : sy = LCase(Trim(CStr(y("section") & "")))
+  ' 空字串排到最後
+  If sx = "" And sy <> "" Then RowCmp = 1 : Exit Function
+  If sy = "" And sx <> "" Then RowCmp = -1 : Exit Function
+  If sx < sy Then RowCmp = -1 : Exit Function
+  If sx > sy Then RowCmp = 1 : Exit Function
+  If x("sortkey") < y("sortkey") Then RowCmp = -1 : Exit Function
+  If x("sortkey") > y("sortkey") Then RowCmp = 1 : Exit Function
+  RowCmp = 0
 End Function
 
 ' 透過 Notes 用 MIME 寄 HTML 信

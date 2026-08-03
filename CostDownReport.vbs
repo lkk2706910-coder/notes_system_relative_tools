@@ -27,6 +27,8 @@ Const F_FORECAST_DT  = "Forecast_Rls_Date"    ' 篩選＋分組用
 Const F_MONTHLY      = "Benefit_Per_Month"
 Const F_TOTAL        = "Month_Total"
 Const F_ACTUAL_DT    = "Actual_Date_Final"    ' 需為空才保留
+Const F_STATUS       = "Status"               ' 額外篩選欄
+Const STATUS_LIKE    = "New Project%"         ' 對 Status 的比對樣式；% 為萬用字元(任意字串)；留空＝不套用
 
 ' --- 寄信 ---
 Const MAIL_TO      = "bo_hsiang_kao@umc.com"          ' 收件人，多人分號分隔
@@ -100,9 +102,10 @@ Do While Not (doc Is Nothing)
 
     Dim fd : fd = ItemDate(doc, F_FORECAST_DT)
     Dim ad : ad = ItemDate(doc, F_ACTUAL_DT)
+    Dim stVal : stVal = ItemText(doc, F_STATUS)
 
-    ' 保留條件：Forecast_Rls_Date 有值 AND Actual_Date_Final 無值
-    If (Not IsEmpty(fd)) And IsEmpty(ad) Then
+    ' 保留條件：Forecast_Rls_Date 有值 AND Actual_Date_Final 無值 AND Status 符合 STATUS_LIKE
+    If (Not IsEmpty(fd)) And IsEmpty(ad) And LikeMatchPct(stVal, STATUS_LIKE) Then
       Dim mkey : mkey = FmtMonth(fd)
       If Not groups.Exists(mkey) Then _
         groups.Add mkey, CreateObject("System.Collections.ArrayList")
@@ -230,6 +233,32 @@ Function FmtNum(n)
   FmtNum = FormatNumber(n, 0, -1, 0, -1)   ' 0 小數位、含千分位
 End Function
 
+' 三元運算輔助（VBScript 沒有內建 IIf）
+Function IIf(cond, a, b)
+  If cond Then IIf = a Else IIf = b
+End Function
+
+' 比對「% 為萬用字元(任意字串)」的樣式；不分大小寫。pattern 空＝視為符合
+Function LikeMatchPct(s, pattern)
+  If pattern = "" Then LikeMatchPct = True : Exit Function
+  Dim rx : Set rx = CreateObject("VBScript.RegExp")
+  rx.IgnoreCase = True
+  rx.Global = False
+  Dim out, i, c
+  out = "^"
+  For i = 1 To Len(pattern)
+    c = Mid(pattern, i, 1)
+    Select Case c
+      Case "%" : out = out & ".*"
+      Case ".", "\", "+", "*", "?", "(", ")", "[", "]", "{", "}", "^", "$", "|"
+        out = out & "\" & c
+      Case Else : out = out & c
+    End Select
+  Next
+  rx.Pattern = out & "$"
+  LikeMatchPct = rx.Test(CStr(s & ""))
+End Function
+
 Function Esc(s)
   Esc = Replace(CStr(s & ""), "&", "&amp;")
   Esc = Replace(Esc, "<", "&lt;")
@@ -254,7 +283,8 @@ Function HtmlHeader(scannedCount, keptCount, monthCount)
     "<h2 style='margin:0 0 6px;color:#1f3b57;'>Cost Down Project 預估報表</h2>" & _
     "<p style='color:#667;font-size:12px;margin:0 0 10px;'>" & _
     "來源：<b>" & Esc(SERVER) & "</b> !! <b>" & Esc(DBFILE) & "</b> → <b>" & Esc(VIEWNAME) & "</b><br>" & _
-    "篩選：<code>Forecast_Rls_Date</code> 有值 且 <code>Actual_Date_Final</code> 無值<br>" & _
+    "篩選：<code>Forecast_Rls_Date</code> 有值 且 <code>Actual_Date_Final</code> 無值" & _
+    IIf(STATUS_LIKE <> "", " 且 <code>Status</code> LIKE '<b>" & Esc(STATUS_LIKE) & "</b>'", "") & "<br>" & _
     "掃描 " & scannedCount & " 筆文件，保留 <b>" & keptCount & "</b> 筆，依 Forecast_Rls_Date 月份分成 <b>" & monthCount & "</b> 組。</p>"
 End Function
 

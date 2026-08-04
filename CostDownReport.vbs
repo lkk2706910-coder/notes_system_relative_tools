@@ -32,7 +32,17 @@ Const STATUS_LIKE    = "New Project%"         ' 對 Status 的比對樣式；% �
 Const F_STATION_T11  = "StationTime11"        ' 值格式如 "11^New Project - Approved^07/24/2026 16:25^^^"，取最早的 MM/DD/YYYY
 
 ' --- 寄信 ---
-Const MAIL_TO      = "bo_hsiang_kao@umc.com"          ' 收件人，多人分號分隔
+' 收件人：多人用分號 ; 分隔（可用 & _ 續行方便閱讀）。
+' 注意 VBScript 的 Const 不允許多字串串接，這裡改用 Dim。
+Dim MAIL_TO : MAIL_TO = "bo_hsiang_kao@umc.com;" & _
+                        "g_t_tsai@umc.com;" & _
+                        "jackson_lee@umc.com;" & _
+                        "chun_shun_lin@umc.com;" & _
+                        "yung_feng_tsou@umc.com;" & _
+                        "allen_hung@umc.com;" & _
+                        "yuan_ying_chen@umc.com;" & _
+                        "chien_hsien_li@umc.com;" & _
+                        "yi_ting_lin@umc.com"
 Const MAIL_SUBJECT = "Cost Down Project 預估報表（未實際結案）"
 
 ' --- 其他 ---

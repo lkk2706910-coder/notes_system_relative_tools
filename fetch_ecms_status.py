@@ -26,7 +26,6 @@ import io
 import logging
 import os
 import re
-import shutil
 import sys
 
 DEFAULTS = {
@@ -127,8 +126,28 @@ def mail_when(doc):
         return dt.datetime.min
 
 
+def _stream_bytes(stream):
+    """把 NotesStream 整個讀成 bytes（COM 回來可能是 tuple[int] / bytes / memoryview）"""
+    chunks = []
+    while True:
+        data = stream.Read(65536)
+        if not data:
+            break
+        if isinstance(data, (bytes, bytearray)):
+            chunks.append(bytes(data))
+        elif isinstance(data, memoryview):
+            chunks.append(data.tobytes())
+        else:
+            chunks.append(bytes(bytearray(int(b) & 0xFF for b in data)))
+        if len(chunks[-1]) == 0:
+            break
+    return b"".join(chunks)
+
+
 def extract_first_csv(doc, tmp_dir):
-    """回傳 (path, name)；找不到回 (None, None)"""
+    """回傳 (bytes, name, how)；找不到回 (None, None, None)。
+    優先用 NotesEmbeddedObject.InputStream 直接讀進記憶體（不落地）；
+    舊版 Notes 沒有 InputStream 才退回 ExtractFile 到 tmp_dir 再讀後刪除。"""
     def try_eo(eo):
         try:
             if eo.Type != EMBED_ATTACHMENT:
@@ -136,11 +155,39 @@ def extract_first_csv(doc, tmp_dir):
             name = eo.Source or ""
             if not name.lower().endswith(".csv"):
                 return None
+        except Exception:
+            return None
+
+        # 方法 1：InputStream（記憶體）
+        try:
+            stream = eo.InputStream
+            if stream is not None:
+                try:
+                    data = _stream_bytes(stream)
+                finally:
+                    try:
+                        stream.Close()
+                    except Exception:
+                        pass
+                if data:
+                    return (data, name, "InputStream")
+        except Exception as e:
+            logging.info("InputStream 不可用（%s），改用 ExtractFile", e)
+
+        # 方法 2：ExtractFile → 讀 bytes → 刪檔
+        try:
+            os.makedirs(tmp_dir, exist_ok=True)
             path = os.path.join(tmp_dir, name)
             if os.path.exists(path):
                 os.remove(path)
             eo.ExtractFile(path)
-            return (path, name) if os.path.isfile(path) else None
+            with open(path, "rb") as f:
+                data = f.read()
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            return (data, name, "ExtractFile")
         except Exception as e:
             logging.warning("附件抽取失敗: %s", e)
             return None
@@ -169,13 +216,12 @@ def extract_first_csv(doc, tmp_dir):
                 continue
     except Exception:
         pass
-    return (None, None)
+    return (None, None, None)
 
 
 # ---------- CSV ----------
 
-def read_csv_text(path, charset):
-    raw = open(path, "rb").read()
+def decode_csv(raw, charset):
     tries = [charset] if charset and charset.lower() != "auto" else ["utf-8-sig", "big5", "cp950", "latin-1"]
     last = None
     for enc in tries:
@@ -274,24 +320,23 @@ def main():
     subject = item_text(best, "Subject")
     logging.info("找到 %d 封，取最新：%s（%s）", dc.Count, subject, best_when.strftime("%Y/%m/%d %H:%M"))
 
-    tmp_dir = os.path.join(out_dir, "_tmp")
-    os.makedirs(tmp_dir, exist_ok=True)
-    csv_path, csv_name = extract_first_csv(best, tmp_dir)
-    if not csv_path:
+    raw_bytes, csv_name, how = extract_first_csv(best, os.path.join(out_dir, "_tmp"))
+    if raw_bytes is None:
         logging.error("這封信裡沒有 .csv 附件。")
         return 6
-    logging.info("附件：%s", csv_name)
+    logging.info("附件：%s（%d bytes，%s）", csv_name, len(raw_bytes), how)
 
     if cfg["keep_raw_copy"].lower() in ("1", "true", "yes"):
         raw_dir = os.path.join(out_dir, "raw")
         os.makedirs(raw_dir, exist_ok=True)
         try:
-            shutil.copyfile(csv_path, os.path.join(raw_dir, f"{best_when:%Y%m%d_%H%M}_{csv_name}"))
+            with open(os.path.join(raw_dir, f"{best_when:%Y%m%d_%H%M}_{csv_name}"), "wb") as f:
+                f.write(raw_bytes)
         except OSError as e:
             logging.warning("原始附件備份失敗: %s", e)
 
     try:
-        text, enc = read_csv_text(csv_path, cfg["csv_charset"])
+        text, enc = decode_csv(raw_bytes, cfg["csv_charset"])
     except Exception as e:
         logging.error("CSV 解碼失敗（試改 csv_charset）: %s", e)
         return 7
@@ -325,10 +370,6 @@ def main():
     except OSError as e:
         logging.error("寫入輸出檔失敗（檔案可能被網站/Excel 鎖住）: %s", e)
         return 8
-    try:
-        os.remove(csv_path)
-    except OSError:
-        pass
 
     logging.info("OK 原始 %d 筆 → 篩選後 %d 筆（編碼 %s）；已輸出 %s 與 %s",
                  len(data), len(kept), enc, out_csv, out_html)

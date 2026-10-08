@@ -91,6 +91,17 @@ def setup_logging(path):
         pass
 
 
+def preview_rows():
+    """命令列 --preview [N]：回傳要預覽的列數（預設 10），沒帶參數回 0"""
+    args = sys.argv[1:]
+    if "--preview" not in args:
+        return 0
+    i = args.index("--preview")
+    if i + 1 < len(args) and args[i + 1].isdigit():
+        return int(args[i + 1])
+    return 10
+
+
 def like_to_regex(pattern):
     """% 萬用字元 → regex（整串、不分大小寫）"""
     return re.compile("^" + ".*".join(re.escape(p) for p in pattern.split("%")) + "$", re.IGNORECASE)
@@ -354,6 +365,14 @@ def main():
 
     pats = [like_to_regex(p.strip()) for p in cfg["eqpid_like"].split(";") if p.strip()]
     kept = [r for r in data if len(r) > idx and any(p.match(r[idx]) for p in pats)]
+
+    # --preview [N]：把標題與篩選後前 N 列印到畫面/ log，方便不開檔確認抓到的內容
+    n_prev = preview_rows()
+    if n_prev:
+        logging.info("預覽（篩選後前 %d 列，共 %d 列）：", min(n_prev, len(kept)), len(kept))
+        logging.info("  %s", " | ".join(header))
+        for r in kept[:n_prev]:
+            logging.info("  %s", " | ".join(r))
 
     out_csv = os.path.join(out_dir, cfg["out_csv"])
     out_html = os.path.join(out_dir, cfg["out_html"])

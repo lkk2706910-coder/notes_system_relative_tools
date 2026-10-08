@@ -56,6 +56,15 @@ build_exe.bat
 
 手動：`FetchEcmsStatus.exe`（或開發時 `python fetch_ecms_status.py`）。前提：**Notes client 已開啟並登入**。
 
+### 怎麼確認真的抓到附件（不落地也看得到）
+
+- **log / 畫面**：`附件：<檔名>（<bytes> bytes，InputStream）` 代表已把附件讀進記憶體；`OK 原始 N 筆 → 篩選後 M 筆` 是整份附件的列數與符合條件的列數。
+- **`--preview [N]`**：加這個參數會把標題列與篩選後前 N 列（預設 10）直接印在畫面與 log，不用開任何檔：
+  ```bat
+  FetchEcmsStatus.exe --preview 20
+  ```
+- **`keep_raw_copy=true`**（預設）：把記憶體裡的附件原樣寫到 `out_dir\raw\yyyymmdd_hhmm_<附件名>.csv`，可拿去跟信裡的附件比對；確認沒問題後可改 `false` 完全不留原檔。
+
 信在 08:00 / 15:30 / 20:30 / 23:30 到，建議各延後 10 分鐘跑。系統管理員命令提示字元：
 
 ```bat

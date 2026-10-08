@@ -48,7 +48,19 @@ Notes 信箱 ──FetchEcmsStatus.exe（排程 4 次/天）──▶ data\ecms_
 ```bat
 build_exe.bat
 ```
-會 `pip install -r requirements.txt`（`pywin32`、`pyinstaller`）再 `pyinstaller --onefile`，產出 `dist\FetchEcmsStatus.exe`。
+會用**同一個** Python 安裝 `pywin32`、`pyinstaller`，先確認 `import win32com.client` 成功，再以 `--hidden-import`（`pythoncom`、`pywintypes`、`win32com.client`…）打包，產出 `dist\FetchEcmsStatus.exe`。機器上有多個 Python 時，改 bat 開頭的 `set PY=`（例如 `py -3-32`）。
+
+手動打包等價指令：
+```bat
+python -m pip install --upgrade pywin32 pyinstaller
+python -m PyInstaller --onefile --console --clean --name FetchEcmsStatus ^
+  --hidden-import pythoncom --hidden-import pywintypes ^
+  --hidden-import win32com --hidden-import win32com.client ^
+  --hidden-import win32com.client.dynamic --hidden-import win32com.client.gencache ^
+  --hidden-import win32timezone --collect-submodules win32com ^
+  fetch_ecms_status.py
+```
+exe 若印 `載入 pywin32 失敗`，幾乎都是「安裝 pywin32 的 Python」和「打包用的 Python」不是同一個，或漏了上面的 `--hidden-import`。
 
 > **位元數**：Python 必須跟 Notes client 同位元（Notes 多半是 32 位元 → 用 32 位元 Python 打包），否則 `Dispatch("Notes.NotesSession")` 會失敗。查法：`python -c "import struct;print(struct.calcsize('P')*8)"` 要印 `32`。
 

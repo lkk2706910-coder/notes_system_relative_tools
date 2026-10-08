@@ -296,9 +296,13 @@ def main():
     setup_logging(abs_path(base, cfg["log_file"]))
 
     try:
+        import pythoncom  # noqa
+        import pywintypes  # noqa
         import win32com.client  # noqa
-    except ImportError:
-        logging.error("缺少 pywin32，請先 pip install pywin32（且位元數需與 Notes client 一致）")
+    except ImportError as e:
+        logging.error("載入 pywin32 失敗：%s", e)
+        logging.error("Python=%s (%d-bit) frozen=%s", sys.executable, 64 if sys.maxsize > 2**32 else 32, getattr(sys, "frozen", False))
+        logging.error("請用「打包時同一個 python」執行 pip install pywin32，並以 --hidden-import win32com.client 等參數打包（見 build_exe.bat）")
         return 4
 
     try:

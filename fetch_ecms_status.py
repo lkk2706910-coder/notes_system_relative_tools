@@ -62,8 +62,20 @@ def load_config():
     cfg = dict(DEFAULTS)
     ini = os.path.join(app_dir(), "fetch_ecms_status.ini")
     if os.path.isfile(ini):
+        # 記事本可能存成 ANSI(Big5)，依序試 UTF-8 / Big5 / cp950 / latin-1
+        raw = open(ini, "rb").read()
+        text = None
+        for enc in ("utf-8-sig", "big5", "cp950", "latin-1"):
+            try:
+                text = raw.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
         cp = configparser.ConfigParser(interpolation=None)
-        cp.read(ini, encoding="utf-8-sig")
+        try:
+            cp.read_string(text or "")
+        except configparser.Error as e:
+            raise SystemExit("設定檔格式錯誤 %s：%s" % (ini, e))
         if cp.has_section("ecms"):
             for k, v in cp.items("ecms"):
                 cfg[k.lower()] = v.strip()

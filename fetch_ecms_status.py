@@ -271,12 +271,15 @@ def extract_first_csv(ns, db, doc, tmp_dir):
           → ExtractFile 到 tmp_dir 讀後刪除（最後手段）。"""
     def try_eo(eo):
         try:
-            if eo.Type != EMBED_ATTACHMENT:
-                return None
+            et = eo.Type
             name = eo.Source or ""
+            logging.info("附件偵測：物件 Type=%s Source=%s", et, name)
+            if et != EMBED_ATTACHMENT:
+                return None
             if not name.lower().endswith(".csv"):
                 return None
-        except Exception:
+        except Exception as e:
+            logging.info("附件偵測：物件屬性讀取失敗：%s", e)
             return None
 
         # 方法 1：InputStream（記憶體）
@@ -324,25 +327,31 @@ def extract_first_csv(ns, db, doc, tmp_dir):
     try_eo.mime_tried = False
     try:
         eos = doc.EmbeddedObjects
+        n = len(eos) if eos else 0
+        logging.info("附件偵測：doc.EmbeddedObjects = %d 個", n)
         if eos:
             for eo in eos:
                 r = try_eo(eo)
                 if r:
                     return r
-    except Exception:
-        pass
+    except Exception as e:
+        logging.info("附件偵測：doc.EmbeddedObjects 讀取失敗：%s", e)
     try:
+        rt = 0
         for it in doc.Items:
             try:
                 if it.Type != RICHTEXT:
                     continue
+                rt += 1
                 reos = it.EmbeddedObjects
+                logging.info("附件偵測：RichText 欄位 %s 內 EmbeddedObjects = %d 個", it.Name, len(reos) if reos else 0)
                 if reos:
                     for eo in reos:
                         r = try_eo(eo)
                         if r:
                             return r
-            except Exception:
+            except Exception as e:
+                logging.info("附件偵測：欄位讀取失敗：%s", e)
                 continue
     except Exception:
         pass
@@ -418,11 +427,8 @@ def main():
         return 4
 
     try:
-        # 先試早期繫結（有型別庫時方法/屬性都分得清楚），不行再退回晚期繫結
-        try:
-            ns = win32com.client.gencache.EnsureDispatch("Notes.NotesSession")
-        except Exception:
-            ns = win32com.client.Dispatch("Notes.NotesSession")
+        # 只用晚期繫結：Notes 型別庫走早期繫結時 EmbeddedObjects 等屬性會回空
+        ns = win32com.client.Dispatch("Notes.NotesSession")
     except Exception as e:
         logging.error("無法建立 Notes.NotesSession（Notes 未開/未登入？或 Python 位元數與 Notes 不符）: %s", e)
         return 4

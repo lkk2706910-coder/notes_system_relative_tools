@@ -17,7 +17,7 @@ Notes 信箱 ──FetchEcmsStatus.exe（排程 4 次/天）──▶ data\ecms_
 ### 做什麼
 
 1. 在信箱用 `@Begins(Subject; "ECMS P58 Current Online Status Report")` 找最近 `lookback_days` 天的信，取**最新一封**（依 `DeliveredDate`，沒有就用文件建立時間）。
-2. **不落地**讀出第一個 `.csv` 附件：用 `NotesEmbeddedObject.InputStream` 直接把 bytes 讀進記憶體（Notes 8.5.1 以上）；舊版沒有 `InputStream` 才退回 `ExtractFile` 到 `_tmp\` 讀完即刪。
+2. **不落地**讀出第一個 `.csv` 附件，依序嘗試：① `NotesEmbeddedObject.InputStream`（記憶體）→ ② MIME `GetMIMEEntity` + `GetContentAsBytes` 解碼進 `NotesStream`（記憶體）→ ③ 最後手段 `ExtractFile` 到 `_tmp\` 讀完即刪並移除資料夾。log 的 `附件：…（bytes，方式）` 會印出實際用的是哪一種。
 3. 自動判斷分隔（逗號/Tab/分號）與編碼（`csv_charset=auto` 依序試 `utf-8-sig / big5 / cp950 / latin-1`）。
 4. 依 `eqpid_like` 篩選 `EQPID` 欄（`%` 萬用字元、`;` 分隔多個、符合任一即保留；預設 `NISACVD-B%;SACVD-B%`）。
 5. 輸出到 `out_dir`（先寫 `.tmp` 再 rename，網頁不會讀到半成品）：

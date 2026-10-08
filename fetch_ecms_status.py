@@ -114,6 +114,16 @@ def preview_rows():
     return 10
 
 
+def com_call(obj, name, *args):
+    """呼叫 Notes COM 方法。拿不到型別資訊時（常見於跨位元），pywin32 會把方法誤判成屬性而回
+    「找不到成員」；先 _FlagAsMethod 標成方法再呼叫就正常。"""
+    try:
+        obj._FlagAsMethod(name)
+    except Exception:
+        pass
+    return getattr(obj, name)(*args)
+
+
 def like_to_regex(pattern):
     """% 萬用字元 → regex（整串、不分大小寫）"""
     return re.compile("^" + ".*".join(re.escape(p) for p in pattern.split("%")) + "$", re.IGNORECASE)
@@ -123,9 +133,9 @@ def like_to_regex(pattern):
 
 def item_text(doc, name):
     try:
-        if not doc.HasItem(name):
+        if not com_call(doc, "HasItem", name):
             return ""
-        it = doc.GetFirstItem(name)
+        it = com_call(doc, "GetFirstItem", name)
         return (it.Text or "") if it is not None else ""
     except Exception:
         return ""
@@ -153,7 +163,7 @@ def _stream_bytes(stream):
     """把 NotesStream 整個讀成 bytes（COM 回來可能是 tuple[int] / bytes / memoryview）"""
     chunks = []
     while True:
-        data = stream.Read(65536)
+        data = com_call(stream, "Read", 65536)
         if not data:
             break
         if isinstance(data, (bytes, bytearray)):
@@ -189,7 +199,7 @@ def extract_first_csv(doc, tmp_dir):
                     data = _stream_bytes(stream)
                 finally:
                     try:
-                        stream.Close()
+                        com_call(stream, "Close")
                     except Exception:
                         pass
                 if data:
@@ -203,7 +213,7 @@ def extract_first_csv(doc, tmp_dir):
             path = os.path.join(tmp_dir, name)
             if os.path.exists(path):
                 os.remove(path)
-            eo.ExtractFile(path)
+            com_call(eo, "ExtractFile", path)
             with open(path, "rb") as f:
                 data = f.read()
             try:
@@ -306,29 +316,36 @@ def main():
         return 4
 
     try:
-        ns = win32com.client.Dispatch("Notes.NotesSession")
+        # 先試早期繫結（有型別庫時方法/屬性都分得清楚），不行再退回晚期繫結
+        try:
+            ns = win32com.client.gencache.EnsureDispatch("Notes.NotesSession")
+        except Exception:
+            ns = win32com.client.Dispatch("Notes.NotesSession")
     except Exception as e:
         logging.error("無法建立 Notes.NotesSession（Notes 未開/未登入？或 Python 位元數與 Notes 不符）: %s", e)
         return 4
 
     server, dbfile = cfg["server"], cfg["dbfile"]
     try:
-        db = ns.GetDatabase(server, dbfile)
+        db = com_call(ns, "GetDatabase", server, dbfile)
         if not db.IsOpen:
-            db.Open(server, dbfile)
+            com_call(db, "Open", server, dbfile)
         if not db.IsOpen:
             raise RuntimeError("IsOpen=False")
     except Exception as e:
         logging.error("無法開啟信箱 [%s] %s: %s", server, dbfile, e)
+        if "-2147352573" in str(e) or "找不到成員" in str(e) or "Member not found" in str(e):
+            logging.error("Notes COM 回「找不到成員」：多半是 Python(%d-bit) 與 Notes client 位元數不同，請改用與 Notes 相同位元的 Python 打包。",
+                          64 if sys.maxsize > 2**32 else 32)
         return 3
 
     lookback = int(cfg["lookback_days"] or 2)
-    since = ns.CreateDateTime("Today")
-    since.AdjustDay(-lookback)
+    since = com_call(ns, "CreateDateTime", "Today")
+    com_call(since, "AdjustDay", -lookback)
     prefix = cfg["subject_prefix"]
     formula = '@Begins(Subject; "%s")' % prefix.replace('"', '""')
     try:
-        dc = db.Search(formula, since, 0)
+        dc = com_call(db, "Search", formula, since, 0)
     except Exception as e:
         logging.error("搜尋信件失敗: %s", e)
         return 5
@@ -337,12 +354,12 @@ def main():
         return 5
 
     best, best_when = None, None
-    doc = dc.GetFirstDocument()
+    doc = com_call(dc, "GetFirstDocument")
     while doc is not None:
         w = mail_when(doc)
         if best is None or w > best_when:
             best, best_when = doc, w
-        doc = dc.GetNextDocument(doc)
+        doc = com_call(dc, "GetNextDocument", doc)
 
     subject = item_text(best, "Subject")
     logging.info("找到 %d 封，取最新：%s（%s）", dc.Count, subject, best_when.strftime("%Y/%m/%d %H:%M"))

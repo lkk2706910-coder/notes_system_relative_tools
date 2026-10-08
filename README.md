@@ -166,4 +166,5 @@ schtasks /Create /TN "ECMS Status 2340" /TR "\"C:\path\to\FetchEcmsStatus.exe\""
 - **中文亂碼**：CSV 是 UTF-8 + BOM、程式用 `Encoding.UTF8` 讀；頁面雖是 `big5`，ASP.NET 輸出會自動轉碼。
 - **一開就 `UnicodeDecodeError ... load_config`**：`fetch_ecms_status.ini` 被記事本存成 ANSI(Big5)。現在程式會自動辨識 UTF-8 / Big5，若仍出錯請把 ini 另存為 UTF-8。
 - **exe 寫檔失敗（exit 8）**：有人用 Excel 開著 `ecms_status.csv`。
+- **`com_error (-2147352573, '找不到成員')`**：pywin32 拿不到 Notes 型別資訊，把方法當屬性呼叫。程式已改成先 `_FlagAsMethod` 再呼叫；若仍出現，幾乎可確定是 Python 與 Notes client **位元數不同**（64 位元 Python 對 32 位元 Notes），請改用 32 位元 Python（`py -3-32`）打包。
 - **exe 連不上 Notes（exit 4）**：Notes 沒開/沒登入、排程不是跑在登入 session、或 Python 位元數與 Notes 不符。

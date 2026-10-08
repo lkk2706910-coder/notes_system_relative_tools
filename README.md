@@ -49,134 +49,48 @@ schtasks /Create /TN "ECMS Status 2340" /TR "\"C:\path\to\fetch_ecms_status.bat\
 
 ---
 
-## 機況表（ASPX）整合
+## 機況表（`eq_status.aspx`）整合
 
-程式每次跑完會覆寫兩個檔（先寫 `.tmp` 再 rename，網頁不會讀到半成品）：
+你的看板每 `REFRESH_MS` 會自己 `fetch` 一次頁面、把 `.board` 的 `innerHTML` 整個換掉，
+而 `phTable` 就在 `.board` 裡——所以**只要在 code-behind 把 ECMS 表格 append 進 `phTable`，就會跟著 PM 面板一起自動刷新**，不需要 iframe、不用再寫前端 JS。
 
-| 檔 | 內容 | 適合 |
-|---|---|---|
-| `ecms_status.html` | 一段 `<div class="ecms-status">…<table>…</table></div>`，含 meta 行（來源主旨 / 收信時間 / 更新時間 / 筆數） | 直接嵌進頁面，零程式碼 |
-| `ecms_status.csv` | 篩選後資料，UTF-8 + BOM | 想自己排版 / 加條件格式 |
+現成程式碼在 [`aspx_integration/EcmsPanel.snippet.cs`](aspx_integration/EcmsPanel.snippet.cs)，做法完全比照既有的 PM 面板（`BuildPmHtml`）：依檔案修改時間快取、`Monitor.TryEnter` 不排隊、讀檔失敗顯示舊資料並掛 `data-warn`、沿用 `pm-panel / pm-table / pm-alert` class（深色模式自動套用）。
 
-### 1. 把輸出指到站台資料夾
+### 步驟
 
-在 `fetch_ecms_status.ini` 設：
-```ini
-out_dir = C:\inetpub\wwwroot\status\data
-```
-（路徑換成你站台實際位置，`data` 子資料夾會自動建立。）
+1. **輸出指到站台資料夾**（`fetch_ecms_status.ini`）：
+   ```ini
+   out_dir = C:\inetpub\wwwroot\<你的站台>\data
+   ```
+   權限：排程帳號對 `data\` 要「寫入」；IIS 應用程式集區帳號（`IIS AppPool\<集區名>`）要「讀取」。
 
-**權限**：排程執行的 Windows 帳號要對該資料夾有「寫入」；IIS 應用程式集區帳號（通常 `IIS AppPool\<集區名>`）要有「讀取」。資料夾內容 → 安全性 → 新增這兩個帳號即可。
+2. **貼程式碼**到 `eq_status.aspx.cs`：
+   - 把 snippet 的「區塊 A」整段貼進 `class EQ_Status`（例如放在 `BuildPmHtml` 後面）。
+   - 把「區塊 B」這幾行貼進 `Page_Load`，位置在 PM 區塊 `if (PmEnabled()) { ... }` **之後**、`phTable.Controls.Clear();` **之前**：
+     ```csharp
+     string ecmsWarning;
+     DateTime ecmsTime;
+     List<string[]> ecmsRows = LoadEcmsCached(out ecmsWarning, out ecmsTime);
+     html.Append(BuildEcmsHtml(ecmsRows, ecmsWarning, ecmsTime));
+     ```
+   - 既有 `using` 已足夠（`System.IO`、`System.Text`、`System.Threading`、`System.Globalization`、`System.Collections.Generic`）。
 
-### 2A. 最簡單：`<iframe>`（不用動 code-behind）
+3. **（選用）`web.config` `<appSettings>`**，都有預設值：
 
-在機況表頁面底部放：
-```html
-<iframe id="ecms" src="data/ecms_status.html" style="width:100%;border:0;height:600px"></iframe>
-<script>
-  // 每 5 分鐘重載一次，並加時間戳避免瀏覽器快取
-  setInterval(function () {
-    document.getElementById("ecms").src = "data/ecms_status.html?t=" + Date.now();
-  }, 5 * 60 * 1000);
-</script>
-```
-高度可視內容調整，或用 `onload` 量 iframe 內容高度自動撐開。
+   | key | 預設 | 說明 |
+   |---|---|---|
+   | `EcmsCsvPath` | `~/data/ecms_status.csv` | CSV 位置（相對站台根目錄） |
+   | `EcmsAlertStatus` | `ON` | `EC_CHECKING_STATUS` **不等於**此值的列整列標紅（`pm-alert`）；留空＝不標 |
+   | `EcmsColumns` | （全部） | 只顯示這些欄，如 `EQPID,EC_CHECKING_STATUS,UPDATE_TMST` |
+   | `EcmsTitle` | `ECMS Online Status` | 面板標題 |
 
-### 2B. 嵌進同一頁：`Literal` 讀檔（版面統一、可套同一份 CSS）
-
-ASPX：
-```aspx
-<asp:Literal ID="litEcms" runat="server" Mode="PassThrough" />
-```
-
-C# code-behind：
-```csharp
-using System.IO;
-using System.Text;
-
-protected void Page_Load(object sender, EventArgs e)
-{
-    string p = Server.MapPath("~/data/ecms_status.html");
-    litEcms.Text = File.Exists(p)
-        ? File.ReadAllText(p, Encoding.UTF8)
-        : "<p style='color:#999'>ECMS 狀態尚無資料</p>";
-}
-```
-
-VB.NET code-behind：
-```vb
-Imports System.IO
-Imports System.Text
-
-Protected Sub Page_Load(sender As Object, e As EventArgs) Handles Me.Load
-    Dim p As String = Server.MapPath("~/data/ecms_status.html")
-    If File.Exists(p) Then
-        litEcms.Text = File.ReadAllText(p, Encoding.UTF8)
-    Else
-        litEcms.Text = "<p style='color:#999'>ECMS 狀態尚無資料</p>"
-    End If
-End Sub
-```
-
-頁面要自動更新畫面，在 `<head>` 加 `<meta http-equiv="refresh" content="300">`（每 5 分鐘），或用 `UpdatePanel` + `Timer`。
-
-### 2C. 自己排版：讀 CSV 綁 `GridView`
-
-ASPX：
-```aspx
-<asp:GridView ID="gvEcms" runat="server" AutoGenerateColumns="true" CssClass="ecms-table" />
-```
-
-C#：
-```csharp
-using System.Data;
-using System.IO;
-using System.Text;
-
-void BindEcms()
-{
-    string p = Server.MapPath("~/data/ecms_status.csv");
-    if (!File.Exists(p)) return;
-    var lines = File.ReadAllLines(p, Encoding.UTF8);
-    if (lines.Length == 0) return;
-    var dt = new DataTable();
-    foreach (var h in SplitCsv(lines[0])) dt.Columns.Add(h);
-    for (int i = 1; i < lines.Length; i++)
-    {
-        if (string.IsNullOrWhiteSpace(lines[i])) continue;
-        var cells = SplitCsv(lines[i]);
-        var row = dt.NewRow();
-        for (int c = 0; c < dt.Columns.Count && c < cells.Length; c++) row[c] = cells[c];
-        dt.Rows.Add(row);
-    }
-    gvEcms.DataSource = dt;
-    gvEcms.DataBind();
-}
-
-// 處理「有雙引號、逗號在引號內」的 CSV 欄位
-static string[] SplitCsv(string line)
-{
-    var result = new System.Collections.Generic.List<string>();
-    var sb = new StringBuilder(); bool inQ = false;
-    for (int i = 0; i < line.Length; i++)
-    {
-        char ch = line[i];
-        if (inQ) { if (ch == '"') { if (i + 1 < line.Length && line[i + 1] == '"') { sb.Append('"'); i++; } else inQ = false; } else sb.Append(ch); }
-        else if (ch == '"') inQ = true;
-        else if (ch == ',') { result.Add(sb.ToString()); sb.Clear(); }
-        else sb.Append(ch);
-    }
-    result.Add(sb.ToString());
-    return result.ToArray();
-}
-```
-在 `Page_Load` 裡 `if (!IsPostBack) BindEcms();`。接著就能用 `RowDataBound` 做條件格式（例如 `EC_CHECKING_STATUS` 不是 `ON` 就標紅）。
+4. 存檔後重新整理頁面，ECMS 表格會出現在 PM 面板下方，標題旁顯示「資料時間」＝CSV 最後寫入時間，之後隨看板每次 AJAX 更新自動換新。
 
 ### 常見問題
 
-- **網頁顯示舊資料**：瀏覽器快取 → `iframe` 用上面帶 `?t=` 的寫法；或 IIS 對 `data/` 關掉輸出快取。
-- **中文亂碼**：兩個輸出檔都是 UTF-8；`Literal` 讀檔請用 `Encoding.UTF8`；頁面 `<meta charset="utf-8">`。
-- **IIS 不給下載 `.html`/`.csv`**：靜態檔預設可讀；若站台鎖了 MIME 類型，在 IIS → MIME 類型補 `.csv → text/csv`。
+- **顯示舊資料 / 沒更新**：看面板「資料時間」是否跟著排程走；沒變代表排程沒寫到 `out_dir`（看 `fetch_ecms_status_log.txt`）。
+- **出現 ⚠ 找不到 ECMS 資料檔**：`out_dir` 與 `EcmsCsvPath` 指的不是同一個檔，或 IIS 帳號沒讀取權。
+- **中文亂碼**：CSV 是 UTF-8 + BOM、程式用 `Encoding.UTF8` 讀；頁面雖是 `big5`，ASP.NET 輸出時會自動轉碼，一般無須處理。
 - **檔案被鎖、程式寫不進去**：確認沒有人用 Excel 開著 `ecms_status.csv`；程式會回 exit code 8。
 
 **Python / exe 版（`fetch_ecms_status.py`）**

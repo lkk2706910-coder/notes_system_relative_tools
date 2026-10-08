@@ -47,24 +47,137 @@ schtasks /Create /TN "ECMS Status 2340" /TR "\"C:\path\to\fetch_ecms_status.bat\
 ```
 排程要在「使用者已登入、Notes client 開著」的 session 下執行（工作排程器選「只有在使用者登入時才執行」）。
 
-**機況表（ASPX）嵌入方式**
+---
 
-把 `OUT_DIR` 指到站台資料夾（例 `C:\inetpub\wwwroot\status\data`），然後擇一：
+## 機況表（ASPX）整合
 
-1. 最簡單——`<iframe>`：
-   ```html
-   <iframe src="data/ecms_status.html" style="width:100%;border:0;height:600px"></iframe>
-   ```
-2. 直接嵌進頁面（code-behind 讀檔塞進 `Literal`）：
-   ```aspx
-   <asp:Literal ID="litEcms" runat="server" />
-   ```
-   ```csharp
-   // Page_Load
-   var p = Server.MapPath("~/data/ecms_status.html");
-   litEcms.Text = File.Exists(p) ? File.ReadAllText(p, Encoding.UTF8) : "<p>尚無資料</p>";
-   ```
-3. 要自己排版：讀 `ecms_status.csv` 綁到 `GridView`。
+程式每次跑完會覆寫兩個檔（先寫 `.tmp` 再 rename，網頁不會讀到半成品）：
+
+| 檔 | 內容 | 適合 |
+|---|---|---|
+| `ecms_status.html` | 一段 `<div class="ecms-status">…<table>…</table></div>`，含 meta 行（來源主旨 / 收信時間 / 更新時間 / 筆數） | 直接嵌進頁面，零程式碼 |
+| `ecms_status.csv` | 篩選後資料，UTF-8 + BOM | 想自己排版 / 加條件格式 |
+
+### 1. 把輸出指到站台資料夾
+
+在 `fetch_ecms_status.ini` 設：
+```ini
+out_dir = C:\inetpub\wwwroot\status\data
+```
+（路徑換成你站台實際位置，`data` 子資料夾會自動建立。）
+
+**權限**：排程執行的 Windows 帳號要對該資料夾有「寫入」；IIS 應用程式集區帳號（通常 `IIS AppPool\<集區名>`）要有「讀取」。資料夾內容 → 安全性 → 新增這兩個帳號即可。
+
+### 2A. 最簡單：`<iframe>`（不用動 code-behind）
+
+在機況表頁面底部放：
+```html
+<iframe id="ecms" src="data/ecms_status.html" style="width:100%;border:0;height:600px"></iframe>
+<script>
+  // 每 5 分鐘重載一次，並加時間戳避免瀏覽器快取
+  setInterval(function () {
+    document.getElementById("ecms").src = "data/ecms_status.html?t=" + Date.now();
+  }, 5 * 60 * 1000);
+</script>
+```
+高度可視內容調整，或用 `onload` 量 iframe 內容高度自動撐開。
+
+### 2B. 嵌進同一頁：`Literal` 讀檔（版面統一、可套同一份 CSS）
+
+ASPX：
+```aspx
+<asp:Literal ID="litEcms" runat="server" Mode="PassThrough" />
+```
+
+C# code-behind：
+```csharp
+using System.IO;
+using System.Text;
+
+protected void Page_Load(object sender, EventArgs e)
+{
+    string p = Server.MapPath("~/data/ecms_status.html");
+    litEcms.Text = File.Exists(p)
+        ? File.ReadAllText(p, Encoding.UTF8)
+        : "<p style='color:#999'>ECMS 狀態尚無資料</p>";
+}
+```
+
+VB.NET code-behind：
+```vb
+Imports System.IO
+Imports System.Text
+
+Protected Sub Page_Load(sender As Object, e As EventArgs) Handles Me.Load
+    Dim p As String = Server.MapPath("~/data/ecms_status.html")
+    If File.Exists(p) Then
+        litEcms.Text = File.ReadAllText(p, Encoding.UTF8)
+    Else
+        litEcms.Text = "<p style='color:#999'>ECMS 狀態尚無資料</p>"
+    End If
+End Sub
+```
+
+頁面要自動更新畫面，在 `<head>` 加 `<meta http-equiv="refresh" content="300">`（每 5 分鐘），或用 `UpdatePanel` + `Timer`。
+
+### 2C. 自己排版：讀 CSV 綁 `GridView`
+
+ASPX：
+```aspx
+<asp:GridView ID="gvEcms" runat="server" AutoGenerateColumns="true" CssClass="ecms-table" />
+```
+
+C#：
+```csharp
+using System.Data;
+using System.IO;
+using System.Text;
+
+void BindEcms()
+{
+    string p = Server.MapPath("~/data/ecms_status.csv");
+    if (!File.Exists(p)) return;
+    var lines = File.ReadAllLines(p, Encoding.UTF8);
+    if (lines.Length == 0) return;
+    var dt = new DataTable();
+    foreach (var h in SplitCsv(lines[0])) dt.Columns.Add(h);
+    for (int i = 1; i < lines.Length; i++)
+    {
+        if (string.IsNullOrWhiteSpace(lines[i])) continue;
+        var cells = SplitCsv(lines[i]);
+        var row = dt.NewRow();
+        for (int c = 0; c < dt.Columns.Count && c < cells.Length; c++) row[c] = cells[c];
+        dt.Rows.Add(row);
+    }
+    gvEcms.DataSource = dt;
+    gvEcms.DataBind();
+}
+
+// 處理「有雙引號、逗號在引號內」的 CSV 欄位
+static string[] SplitCsv(string line)
+{
+    var result = new System.Collections.Generic.List<string>();
+    var sb = new StringBuilder(); bool inQ = false;
+    for (int i = 0; i < line.Length; i++)
+    {
+        char ch = line[i];
+        if (inQ) { if (ch == '"') { if (i + 1 < line.Length && line[i + 1] == '"') { sb.Append('"'); i++; } else inQ = false; } else sb.Append(ch); }
+        else if (ch == '"') inQ = true;
+        else if (ch == ',') { result.Add(sb.ToString()); sb.Clear(); }
+        else sb.Append(ch);
+    }
+    result.Add(sb.ToString());
+    return result.ToArray();
+}
+```
+在 `Page_Load` 裡 `if (!IsPostBack) BindEcms();`。接著就能用 `RowDataBound` 做條件格式（例如 `EC_CHECKING_STATUS` 不是 `ON` 就標紅）。
+
+### 常見問題
+
+- **網頁顯示舊資料**：瀏覽器快取 → `iframe` 用上面帶 `?t=` 的寫法；或 IIS 對 `data/` 關掉輸出快取。
+- **中文亂碼**：兩個輸出檔都是 UTF-8；`Literal` 讀檔請用 `Encoding.UTF8`；頁面 `<meta charset="utf-8">`。
+- **IIS 不給下載 `.html`/`.csv`**：靜態檔預設可讀；若站台鎖了 MIME 類型，在 IIS → MIME 類型補 `.csv → text/csv`。
+- **檔案被鎖、程式寫不進去**：確認沒有人用 Excel 開著 `ecms_status.csv`；程式會回 exit code 8。
 
 **Python / exe 版（`fetch_ecms_status.py`）**
 

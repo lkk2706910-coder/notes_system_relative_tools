@@ -312,13 +312,16 @@ def main():
 
     out_csv = os.path.join(out_dir, cfg["out_csv"])
     out_html = os.path.join(out_dir, cfg["out_html"])
+    # 先寫 .tmp 再 rename，避免 ASPX 網頁讀到寫一半的檔
     try:
-        with open(out_csv, "w", newline="", encoding="utf-8-sig") as f:
+        with open(out_csv + ".tmp", "w", newline="", encoding="utf-8-sig") as f:
             w = csv.writer(f)
             w.writerow(header)
             w.writerows(kept)
-        with open(out_html, "w", encoding="utf-8") as f:
+        with open(out_html + ".tmp", "w", encoding="utf-8") as f:
             f.write(build_html(header, kept, subject, best_when, cfg["eqpid_like"]))
+        os.replace(out_csv + ".tmp", out_csv)
+        os.replace(out_html + ".tmp", out_html)
     except OSError as e:
         logging.error("寫入輸出檔失敗（檔案可能被網站/Excel 鎖住）: %s", e)
         return 8

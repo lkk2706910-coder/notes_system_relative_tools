@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# 本機執行產物（log、個人設定、抓下來的資料）
+*_log.txt
+fetch_ecms_status.ini
+raw/
+_tmp/
+ecms_status.csv
+ecms_status.html

@@ -213,19 +213,37 @@ def _mime_walk(entity, out):
             entity = None
 
 
-def extract_csv_via_mime(ns, doc):
-    """用 MIME 結構把 .csv 附件解碼到 NotesStream 再讀成 bytes（不落地）。非 MIME 信回 None"""
+def extract_csv_via_mime(ns, db, doc):
+    """用 MIME 結構把 .csv 附件解碼到 NotesStream 再讀成 bytes（不落地）。非 MIME 信回 None。
+    只在這段期間把 ConvertMIME 關掉並重新載入文件，結束一定還原，不影響其他路徑。"""
     try:
-        root = com_call(doc, "GetMIMEEntity", "Body")
-    except Exception as e:
-        logging.info("GetMIMEEntity 失敗：%s", e)
+        ns.ConvertMIME = False
+    except Exception:
         return None
-    if root is None:
-        return None
-    ents = []
-    _mime_walk(root, ents)
-    for ent in ents:
-        name = _mime_filename(ent)
+    try:
+        try:
+            d2 = com_call(db, "GetDocumentByUNID", doc.UniversalID)
+            root = com_call(d2, "GetMIMEEntity", "Body")
+        except Exception as e:
+            logging.info("GetMIMEEntity 失敗：%s", e)
+            return None
+        if root is None:
+            logging.info("MIME：這封信不是 MIME 格式（GetMIMEEntity 回 None）")
+            return None
+        ents = []
+        _mime_walk(root, ents)
+        names = [_mime_filename(e) for e in ents]
+        logging.info("MIME：共 %d 個 part，檔名：%s", len(ents), [n for n in names if n] or "（無）")
+        return _mime_pick_csv(ns, ents, names)
+    finally:
+        try:
+            ns.ConvertMIME = True
+        except Exception:
+            pass
+
+
+def _mime_pick_csv(ns, ents, names):
+    for ent, name in zip(ents, names):
         if not name.lower().endswith(".csv"):
             continue
         try:
@@ -247,7 +265,7 @@ def extract_csv_via_mime(ns, doc):
     return None
 
 
-def extract_first_csv(ns, doc, tmp_dir):
+def extract_first_csv(ns, db, doc, tmp_dir):
     """回傳 (bytes, name, how)；找不到回 (None, None, None)。
     順序：NotesEmbeddedObject.InputStream（記憶體）→ MIME GetContentAsBytes（記憶體）
           → ExtractFile 到 tmp_dir 讀後刪除（最後手段）。"""
@@ -280,7 +298,7 @@ def extract_first_csv(ns, doc, tmp_dir):
         # 方法 2：MIME（不落地）
         if not try_eo.mime_tried:
             try_eo.mime_tried = True
-            r = extract_csv_via_mime(ns, doc)
+            r = extract_csv_via_mime(ns, db, doc)
             if r:
                 return r
 
@@ -330,7 +348,7 @@ def extract_first_csv(ns, doc, tmp_dir):
         pass
     # MIME 信件 EmbeddedObjects 常是空的：最後再用 MIME 找一次
     if not try_eo.mime_tried:
-        r = extract_csv_via_mime(ns, doc)
+        r = extract_csv_via_mime(ns, db, doc)
         if r:
             return r
     return (None, None, None)
@@ -405,10 +423,6 @@ def main():
             ns = win32com.client.gencache.EnsureDispatch("Notes.NotesSession")
         except Exception:
             ns = win32com.client.Dispatch("Notes.NotesSession")
-        try:
-            ns.ConvertMIME = False   # 保留 MIME 結構，GetMIMEEntity 才讀得到附件 part
-        except Exception:
-            pass
     except Exception as e:
         logging.error("無法建立 Notes.NotesSession（Notes 未開/未登入？或 Python 位元數與 Notes 不符）: %s", e)
         return 4
@@ -452,7 +466,7 @@ def main():
     subject = item_text(best, "Subject")
     logging.info("找到 %d 封，取最新：%s（%s）", dc.Count, subject, best_when.strftime("%Y/%m/%d %H:%M"))
 
-    raw_bytes, csv_name, how = extract_first_csv(ns, best, os.path.join(out_dir, "_tmp"))
+    raw_bytes, csv_name, how = extract_first_csv(ns, db, best, os.path.join(out_dir, "_tmp"))
     if raw_bytes is None:
         logging.error("這封信裡沒有 .csv 附件。")
         return 6

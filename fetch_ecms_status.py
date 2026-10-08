@@ -206,7 +206,7 @@ def extract_first_csv(doc, tmp_dir):
                 if data:
                     return (data, name, "InputStream")
         except Exception as e:
-            logging.info("InputStream 不可用（%s），改用 ExtractFile", e)
+            logging.warning("InputStream 不可用（%s），改用 ExtractFile（附件會暫存到 _tmp 再讀後刪除）", e)
 
         # 方法 2：ExtractFile → 讀 bytes → 刪檔
         try:
@@ -219,6 +219,7 @@ def extract_first_csv(doc, tmp_dir):
                 data = f.read()
             try:
                 os.remove(path)
+                os.rmdir(tmp_dir)          # 用完就把空的 _tmp 收掉
             except OSError:
                 pass
             return (data, name, "ExtractFile")

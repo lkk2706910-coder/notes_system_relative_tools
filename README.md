@@ -90,6 +90,4 @@ schtasks /Create /TN "ECMS Status 2340" /TR "\"C:\path\to\fetch_ecms_status.bat\
 
 ---
 
-## 其他工具
-
-`ListNotesViews.vbs`（列檢視）、`TestFindDoc.vbs`（測試查文件）、`DownloadNotesAttachments.vbs` + `download_attachments.bat`（下載附件）、`SendNotesMail.vbs`（MIME 寄 HTML 信）。各檔頂端註解有完整說明與設定。
+其他通用 Notes 工具（列檢視、查文件、下載附件、寄信）在 `main` branch；本 branch 只保留 ECMS 狀態抓取相關檔案。

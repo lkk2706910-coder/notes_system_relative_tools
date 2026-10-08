@@ -66,7 +66,17 @@ schtasks /Create /TN "ECMS Status 2340" /TR "\"C:\path\to\fetch_ecms_status.bat\
    ```
 3. 要自己排版：讀 `ecms_status.csv` 綁到 `GridView`。
 
-**結束代碼**
+**Python / exe 版（`fetch_ecms_status.py`）**
+
+與 VBS 版邏輯相同，走 `pywin32` 的同一個 `Notes.NotesSession` COM，可用 PyInstaller 打成單一 `FetchEcmsStatus.exe`，不需在目標機器裝 Python。
+
+- 設定：exe（或 .py）同資料夾放 `fetch_ecms_status.ini`（從 `fetch_ecms_status.ini.example` 複製），只列要覆蓋的項目；沒有 ini 就用內建預設。
+- 打包：`build_exe.bat`（會 `pip install -r requirements.txt` 再 `pyinstaller --onefile`），產出 `dist\FetchEcmsStatus.exe`。
+- **位元數**：Python 必須跟 Notes client 同位元（Notes 多半 32 位元 → 用 32 位元 Python 打包），否則 `Dispatch("Notes.NotesSession")` 會失敗。查法：`python -c "import struct;print(struct.calcsize('P')*8)"`。
+- 排程：`schtasks` 的 `/TR` 直接指到 `FetchEcmsStatus.exe`；log 寫在 exe 同資料夾 `fetch_ecms_status_log.txt`。
+- `csv_charset = auto` 會依序試 `utf-8-sig / big5 / cp950 / latin-1`。
+
+**結束代碼**（VBS 與 Python 版相同）
 
 | Code | 意義 |
 |------|------|

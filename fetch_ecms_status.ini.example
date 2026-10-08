@@ -1,0 +1,19 @@
+; 複製成 fetch_ecms_status.ini 放在 exe / .py 同資料夾即生效；沒有此檔則用程式內建預設。
+; 只需列出要覆蓋的項目。
+[ecms]
+server         = UMCM74/UMC
+dbfile         = mail\00047829.nsf
+subject_prefix = ECMS P58 Current Online Status Report
+lookback_days  = 2
+
+eqpid_column   = EQPID
+eqpid_like     = NISACVD-B%;SACVD-B%
+
+; 機況表 ASPX 站台的資料夾；留空＝exe 所在資料夾
+out_dir        = C:\inetpub\wwwroot\status\data
+out_csv        = ecms_status.csv
+out_html       = ecms_status.html
+keep_raw_copy  = true
+; auto = 依序試 utf-8-sig, big5, cp950, latin-1
+csv_charset    = auto
+log_file       = fetch_ecms_status_log.txt

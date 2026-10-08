@@ -10,6 +10,7 @@
 //        EcmsAlertStatus  ON        （EC_CHECKING_STATUS 不等於此值的列整列標紅；留空＝不標）
 //        EcmsColumns      留空＝顯示 CSV 全部欄位；或填 "EQPID,EC_CHECKING_STATUS,UPDATE_TMST"
 //        EcmsTitle        ECMS Online Status
+//  標題旁顯示「收信 / 抓取」時間與筆數（來自 ecms_status.meta.json，exe 會一起產生）。
 //  與 PM 面板同一套保護：讀檔失敗顯示上一次資料並掛警示；依檔案修改時間快取，不重複解析。
 //  面板沿用 pm-panel / pm-table / pm-alert 等既有 class，深色模式自動套用。
 // =====================================================================
@@ -99,13 +100,55 @@ private static string[] SplitCsvLine(string line)
     return result.ToArray();
 }
 
+// 讀 exe 一起寫出的 ecms_status.meta.json（主旨 / 收信時間 / 抓取時間 / 筆數）；沒有就回 null
+private Dictionary<string, object> LoadEcmsMeta()
+{
+    try
+    {
+        string csvPath = Server.MapPath(Setting("EcmsCsvPath", EcmsDefaultPath));
+        string metaPath = Path.ChangeExtension(csvPath, null) + ".meta.json";
+        if (!File.Exists(metaPath)) return null;
+        JavaScriptSerializer ser = new JavaScriptSerializer();
+        return ser.Deserialize<Dictionary<string, object>>(File.ReadAllText(metaPath, Encoding.UTF8));
+    }
+    catch (Exception)
+    {
+        return null;
+    }
+}
+
+private static string MetaStr(Dictionary<string, object> meta, string key)
+{
+    object v;
+    if (meta == null || !meta.TryGetValue(key, out v) || v == null) return "";
+    return Convert.ToString(v, CultureInfo.InvariantCulture);
+}
+
+// "yyyy-MM-dd HH:mm:ss" → "MM-dd HH:mm"；解析失敗就原樣回傳
+private static string ShortTime(string s)
+{
+    DateTime d;
+    if (DateTime.TryParseExact(s, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out d))
+        return d.ToString("MM-dd HH:mm", CultureInfo.InvariantCulture);
+    return s;
+}
+
 private string BuildEcmsHtml(List<string[]> rows, string warning, DateTime fileTimeLocal)
 {
+    Dictionary<string, object> meta = LoadEcmsMeta();
     StringBuilder sb = new StringBuilder();
     sb.Append("<div class='pm-panel ecms-panel'>");
     sb.Append("<div class='pm-title'>" + Server.HtmlEncode(Setting("EcmsTitle", "ECMS Online Status")) + "<span class='pm-sub'>");
-    if (fileTimeLocal != DateTime.MinValue)
+    string mailTime = MetaStr(meta, "mail_time");
+    string fetchTime = MetaStr(meta, "fetch_time");
+    if (mailTime != "") sb.Append("收信 " + Server.HtmlEncode(ShortTime(mailTime)));
+    if (fetchTime != "") sb.Append("　抓取 " + Server.HtmlEncode(ShortTime(fetchTime)));
+    if (mailTime == "" && fetchTime == "" && fileTimeLocal != DateTime.MinValue)
         sb.Append("資料時間 " + fileTimeLocal.ToString("MM-dd HH:mm", CultureInfo.InvariantCulture));
+    if (rows != null && rows.Count > 1)
+        sb.Append("　" + (rows.Count - 1).ToString(CultureInfo.InvariantCulture) + " 筆");
+    string subj = MetaStr(meta, "subject");
+    if (subj != "") sb.Append("</span><span class='pm-sub' title='" + Server.HtmlEncode(subj) + "'>" + Server.HtmlEncode(subj) + "");
     sb.Append("</span></div>");
 
     if (!string.IsNullOrEmpty(warning))

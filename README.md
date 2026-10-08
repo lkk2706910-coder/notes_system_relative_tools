@@ -23,6 +23,7 @@ Notes 信箱 ──FetchEcmsStatus.exe（排程 4 次/天）──▶ data\ecms_
 5. 輸出到 `out_dir`（先寫 `.tmp` 再 rename，網頁不會讀到半成品）：
    - `ecms_status.csv`：篩選後資料，UTF-8 + BOM（網頁讀這個）
    - `ecms_status.html`：同內容的 HTML 表格片段（備用，想直接嵌別的頁面可用）
+   - `ecms_status.meta.json`：主旨、**收信時間、抓取時間**、附件名、原始/篩選筆數（網頁面板標題用）
    - `raw\yyyymmdd_hhmm_<原附件名>.csv`：原始附件備份（`keep_raw_copy=true` 時）
 6. log 寫在 exe 同資料夾 `fetch_ecms_status_log.txt`。
 
@@ -115,7 +116,7 @@ schtasks /Create /TN "ECMS Status 2340" /TR "\"C:\path\to\FetchEcmsStatus.exe\""
 |---|---|
 | 位置 | 看板最下方、PM 面板之後 |
 | 外觀 | 沿用 `pm-panel / pm-title / pm-sub / pm-table / pm-wrap / pm-alert / pm-empty / data-warn` class，**深色模式自動套用**，不必新增 CSS |
-| 標題列 | 面板標題（`EcmsTitle`）＋「資料時間 MM-dd HH:mm」＝ `ecms_status.csv` 最後寫入時間，一眼看出排程有沒有更新 |
+| 標題列 | 面板標題（`EcmsTitle`）＋「收信 MM-dd HH:mm　抓取 MM-dd HH:mm　N 筆」＋信件主旨（來自 `ecms_status.meta.json`）；沒有 meta 檔時退回顯示 CSV 最後寫入時間 |
 | 欄位 | 預設顯示 CSV 全部欄位（`EQP_TYPE, EQP_MODEL, EQPID, EC_CHECKING_STATUS, UPDATEUSER, UPDATE_TMST`）；`EcmsColumns` 可只挑幾欄、順序照設定 |
 | 異常標紅 | `EC_CHECKING_STATUS` **不等於** `EcmsAlertStatus`（預設 `ON`）的列整列紅（`pm-alert`，與 PM 面板同色）；留空＝不標 |
 | 快取 | 依 CSV 檔案修改時間快取，檔沒變就不重新解析；多個瀏覽者共用 |

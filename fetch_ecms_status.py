@@ -23,6 +23,7 @@ import csv
 import datetime as dt
 import html
 import io
+import json
 import logging
 import os
 import re
@@ -417,14 +418,28 @@ def main():
             w.writerows(kept)
         with open(out_html + ".tmp", "w", encoding="utf-8") as f:
             f.write(build_html(header, kept, subject, best_when, cfg["eqpid_like"]))
+        # 中繼資料：主旨 / 收信時間 / 抓取時間 / 筆數，給網頁面板顯示
+        out_meta = os.path.join(out_dir, os.path.splitext(cfg["out_csv"])[0] + ".meta.json")
+        meta = {
+            "subject": subject,
+            "mail_time": best_when.strftime("%Y-%m-%d %H:%M:%S"),
+            "fetch_time": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "attachment": csv_name,
+            "rows_total": len(data),
+            "rows_kept": len(kept),
+            "eqpid_like": cfg["eqpid_like"],
+        }
+        with open(out_meta + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
         os.replace(out_csv + ".tmp", out_csv)
         os.replace(out_html + ".tmp", out_html)
+        os.replace(out_meta + ".tmp", out_meta)
     except OSError as e:
         logging.error("寫入輸出檔失敗（檔案可能被網站/Excel 鎖住）: %s", e)
         return 8
 
-    logging.info("OK 原始 %d 筆 → 篩選後 %d 筆（編碼 %s）；已輸出 %s 與 %s",
-                 len(data), len(kept), enc, out_csv, out_html)
+    logging.info("OK 原始 %d 筆 → 篩選後 %d 筆（編碼 %s）；已輸出 %s、%s、%s",
+                 len(data), len(kept), enc, out_csv, out_html, out_meta)
     return 0
 
 

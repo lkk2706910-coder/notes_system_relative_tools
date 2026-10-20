@@ -372,7 +372,10 @@ class NotesLookup:
                 pass
         formula = '%s = "%s"' % (self.docno_field, key.replace('"', '""'))
         try:
-            dc = com_call(self.db, "Search", formula, None, 1)
+            # 第二參數必須是 NotesDateTime（pywin32 傳 None 會「類型不符」）：給一個很早的日期＝不限時間
+            if not hasattr(self, "_since"):
+                self._since = com_call(self.ns, "CreateDateTime", "01/01/1980")
+            dc = com_call(self.db, "Search", formula, self._since, 1)
             if dc.Count > 0:
                 return com_call(dc, "GetFirstDocument")
         except Exception as e:

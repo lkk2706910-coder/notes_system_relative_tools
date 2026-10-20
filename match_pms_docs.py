@@ -6,7 +6,8 @@ match_pms_docs.py
 讀一份 Excel（key 欄預設 `name`，值像 U20251203756），逐筆到 Notes `eri\\pms.nsf` 用 DOCNO 查對應文件，
 抓 A17 / A21 / A25 / A26，依 A17 的「-」前綴分類（CUSILPE-B12 → CUSILPE），並附上文件的 Notes 連結
 （即文件內容 → Meta → Identifier 的 notes:// URL），輸出成 xlsx：
-  - 明細：原表格所有欄位 + A17/A21/A25/A26 + 機台類別 + Link（可點）
+  - 明細：原表格所有欄位 + A17/A21/A25/A26 + 機台類別 + ePMS Link + GR Link（可點）
+    （GR Link：再到 UMCD14/UMC eop\\gr.nsf 用同一個 key 對 DCNUM 找到的文件連結）
   - 分類統計：每類筆數與 amt 合計
   - 每個類別一張工作表（可關）
 【唯讀，不修改任何文件】
@@ -34,6 +35,13 @@ DEFAULTS = {
     "docno_field":   "DOCNO",
     "fetch_fields":  "A17,A21,A25,A26",
     "class_field":   "A17",           # 用哪個欄位分類
+    # --- 第二個資料庫（GR）：用同一個 key 對 DCNUM，只取文件連結 ---
+    "gr_server":     "UMCD14/UMC",
+    "gr_dbfile":     r"eop\gr.nsf",
+    "gr_view":       "",              # 第一欄為 DCNUM 的檢視（可用 ListNotesViews.vbs 查）；留空＝公式搜尋（較慢）
+    "gr_key_field":  "DCNUM",
+    "gr_fetch_fields": "",            # 也可順便抓 GR 文件欄位，逗號分隔；留空＝只要連結
+    "gr_enabled":    "true",
     # --- Excel ---
     "input_xlsx":    "",              # 留空＝由命令列給；或填固定路徑
     "sheet":         "",              # 留空＝第一個工作表
@@ -193,7 +201,9 @@ def read_input(path, sheet, header_row, key_col):
     return header, data, key_idx
 
 
-def write_output(path, header, out_rows, extra_cols, cat_idx, link_idx, amt_idx, per_cat):
+def write_output(path, header, out_rows, extra_cols, cat_idx, link_idx, amt_idx, per_cat, link_cols=None):
+    if link_cols is None:
+        link_cols = [link_idx] if link_idx is not None else []
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill
     from openpyxl.utils import get_column_letter
@@ -210,10 +220,11 @@ def write_output(path, header, out_rows, extra_cols, cat_idx, link_idx, amt_idx,
             ws.cell(row=1, column=c).fill = fill
         for r in rows:
             ws.append(r)
-            if link_idx is not None and r[link_idx]:
-                cell = ws.cell(row=ws.max_row, column=link_idx + 1)
-                cell.hyperlink = r[link_idx]
-                cell.font = link_font
+            for li in link_cols:
+                if li < len(r) and r[li]:
+                    cell = ws.cell(row=ws.max_row, column=li + 1)
+                    cell.hyperlink = r[li]
+                    cell.font = link_font
         for c, h in enumerate(full_header, 1):
             width = max([len(str(h))] + [len(str(x[c - 1])) for x in rows if x[c - 1] is not None][:200] + [4])
             ws.column_dimensions[get_column_letter(c)].width = min(max(width * 1.1, 8), 60)
@@ -280,19 +291,19 @@ class LookupError_(Exception):
 class NotesLookup:
     """連 Notes、依 DOCNO 找文件。要在使用它的那條執行緒內建立（COM 綁執行緒）。"""
 
-    def __init__(self, cfg):
-        self.cfg = cfg
-        try:
-            import pythoncom
-            pythoncom.CoInitialize()
-        except Exception:
-            pass
-        try:
-            import win32com.client
-            self.ns = win32com.client.Dispatch("Notes.NotesSession")
-        except Exception as e:
-            raise LookupError_(4, "無法建立 Notes.NotesSession（Notes 未開/未登入？pywin32 未裝？位元數不符？）: %s" % e)
-        server, dbfile = cfg["server"], cfg["dbfile"]
+    def __init__(self, server, dbfile, view_name, key_field, fetch_fields, class_field="", ns=None):
+        if ns is None:
+            try:
+                import pythoncom
+                pythoncom.CoInitialize()
+            except Exception:
+                pass
+            try:
+                import win32com.client
+                ns = win32com.client.Dispatch("Notes.NotesSession")
+            except Exception as e:
+                raise LookupError_(4, "無法建立 Notes.NotesSession（Notes 未開/未登入？pywin32 未裝？位元數不符？）: %s" % e)
+        self.ns = ns
         try:
             self.db = com_call(self.ns, "GetDatabase", server, dbfile)
             if not self.db.IsOpen:
@@ -306,17 +317,19 @@ class NotesLookup:
         except Exception:
             self.replica_id = ""
         self.view = None
-        if cfg["docno_view"].strip():
+        if (view_name or "").strip():
             try:
-                self.view = com_call(self.db, "GetView", cfg["docno_view"])
+                self.view = com_call(self.db, "GetView", view_name)
                 if self.view is None:
-                    logging.warning("找不到檢視 %s，改用公式搜尋（較慢）", cfg["docno_view"])
+                    logging.warning("[%s] 找不到檢視 %s，改用公式搜尋（較慢）", dbfile, view_name)
             except Exception as e:
-                logging.warning("取得檢視失敗（%s），改用公式搜尋", e)
+                logging.warning("[%s] 取得檢視失敗（%s），改用公式搜尋", dbfile, e)
+        else:
+            logging.info("[%s] 未設定檢視，用公式搜尋 %s", dbfile, key_field)
         self.server = server
-        self.fields = [f.strip() for f in cfg["fetch_fields"].split(",") if f.strip()]
-        self.class_field = cfg["class_field"].strip()
-        self.docno_field = cfg["docno_field"]
+        self.fields = [f.strip() for f in (fetch_fields or "").split(",") if f.strip()]
+        self.class_field = (class_field or "").strip()
+        self.docno_field = key_field
 
     def find(self, key):
         if self.view is not None:
@@ -343,17 +356,25 @@ class NotesLookup:
         if d is None:
             return [""] * len(self.fields), "(查無)", "", False
         vals = [item_text(d, f) for f in self.fields]
-        cat = class_of(item_text(d, self.class_field))
+        cat = class_of(item_text(d, self.class_field)) if self.class_field else ""
         return vals, cat, doc_link(d, self.server, self.replica_id), True
 
 
 def run_lookup(cfg, header, data, key_idx, progress=None):
     """對每列查 Notes。回傳 dict(out_rows, found, missing, extra_cols, cat_idx, link_idx, amt_idx)。
     progress(n, total, found) 可選。"""
-    lk = NotesLookup(cfg)
-    extra_cols = lk.fields + ["機台類別", "Link"]
+    lk = NotesLookup(cfg["server"], cfg["dbfile"], cfg["docno_view"], cfg["docno_field"],
+                     cfg["fetch_fields"], cfg["class_field"])
+    gr = None
+    if cfg["gr_enabled"].lower() in ("1", "true", "yes"):
+        gr = NotesLookup(cfg["gr_server"], cfg["gr_dbfile"], cfg["gr_view"], cfg["gr_key_field"],
+                         cfg["gr_fetch_fields"], "", ns=lk.ns)
+    extra_cols = lk.fields + ["機台類別", "ePMS Link"]
+    if gr is not None:
+        extra_cols += ["GR " + f for f in gr.fields] + ["GR Link"]
     cat_idx = len(header) + len(lk.fields)
     link_idx = cat_idx + 1
+    gr_found = 0
     amt_idx = None
     amt_name = cfg["amt_column"].strip().lower()
     if amt_name:
@@ -369,11 +390,21 @@ def run_lookup(cfg, header, data, key_idx, progress=None):
             found += 1
         elif key:
             missing.append(key)
-        out_rows.append(list(row) + vals + [cat, link])
+        extra = vals + [cat, link]
+        if gr is not None:
+            gvals, _, glink, gok = gr.lookup_row(key)
+            if gok:
+                gr_found += 1
+            extra += gvals + [glink]
+        out_rows.append(list(row) + extra)
         if progress and (n % 10 == 0 or n == len(data)):
             progress(n, len(data), found)
+    if gr is not None:
+        logging.info("GR（%s）命中 %d / %d", cfg["gr_dbfile"], gr_found, len(data))
+    link_cols = [i for i, c in enumerate(header + extra_cols) if c.endswith("Link")]
     return {"out_rows": out_rows, "found": found, "missing": missing, "extra_cols": extra_cols,
-            "cat_idx": cat_idx, "link_idx": link_idx, "amt_idx": amt_idx}
+            "cat_idx": cat_idx, "link_idx": link_idx, "amt_idx": amt_idx, "link_cols": link_cols,
+            "gr_found": gr_found}
 
 
 # ---------- CLI ----------
@@ -411,11 +442,11 @@ def run_cli(cfg, base, in_path, preview):
     out_path = abs_path(base, cfg["output_xlsx"]) or os.path.splitext(in_path)[0] + "_notes.xlsx"
     try:
         write_output(out_path, header, out_rows, res["extra_cols"], res["cat_idx"], res["link_idx"], res["amt_idx"],
-                     cfg["sheet_per_category"].lower() in ("1", "true", "yes"))
+                     cfg["sheet_per_category"].lower() in ("1", "true", "yes"), res["link_cols"])
     except Exception as e:
         logging.error("寫入 %s 失敗（檔案是否開著？）: %s", out_path, e)
         return 8
-    logging.info("OK %d 列，命中 %d，查無 %d；輸出 %s", len(data), res["found"], len(res["missing"]), out_path)
+    logging.info("OK %d 列，ePMS 命中 %d，查無 %d，GR 命中 %d；輸出 %s", len(data), res["found"], len(res["missing"]), res["gr_found"], out_path)
     if res["missing"]:
         logging.info("查無的 key（前 20）：%s", ", ".join(res["missing"][:20]))
     return 0
@@ -574,7 +605,7 @@ def run_gui(cfg, base, in_path):
             tv["columns"] = ids
             for cid, name in zip(ids, cols):
                 tv.heading(cid, text=name)
-                tv.column(cid, width=40 if name == "✓" else (260 if name == "Link" else 110),
+                tv.column(cid, width=40 if name == "✓" else (260 if name.endswith("Link") else 110),
                           anchor="center" if name == "✓" else "w", stretch=False)
             f = cat_cb.get()
             n = 0
@@ -628,8 +659,8 @@ def run_gui(cfg, base, in_path):
         cols = all_cols()
         res = state["res"]
         idx = int(iid)
-        if cols[ci] == "Link":
-            link = res["out_rows"][idx][res["link_idx"]]
+        if cols[ci].endswith("Link"):
+            link = res["out_rows"][idx][ci - 1]
             if link:
                 try:
                     os.startfile(link)
@@ -710,7 +741,7 @@ def run_gui(cfg, base, in_path):
                     bar["value"] = bar["maximum"]
                     status.configure(text="完成：%d 列，命中 %d，查無 %d。請逐列確認後按「匯出 Excel…」"
                                      % (len(res["out_rows"]), res["found"], len(res["missing"])))
-                    logging.info("查詢完成：%d 列，命中 %d，查無 %d", len(res["out_rows"]), res["found"], len(res["missing"]))
+                    logging.info("查詢完成：%d 列，ePMS 命中 %d，查無 %d，GR 命中 %d", len(res["out_rows"]), res["found"], len(res["missing"]), res["gr_found"])
                     if res["missing"]:
                         logging.info("查無的 key（前 20）：%s", ", ".join(res["missing"][:20]))
                     fill_table()
@@ -742,7 +773,7 @@ def run_gui(cfg, base, in_path):
             return
         try:
             write_output(p, state["header"], rows, res["extra_cols"], res["cat_idx"], res["link_idx"], res["amt_idx"],
-                         cfg["sheet_per_category"].lower() in ("1", "true", "yes"))
+                         cfg["sheet_per_category"].lower() in ("1", "true", "yes"), res["link_cols"])
         except Exception as e:
             messagebox.showerror("匯出失敗", "寫入 %s 失敗（檔案是否開著？）\n%s" % (p, e))
             return

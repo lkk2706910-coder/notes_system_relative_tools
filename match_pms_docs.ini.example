@@ -7,6 +7,16 @@ docno_field  = DOCNO
 fetch_fields = A17,A21,A25,A26
 class_field  = A17
 
+; 第二個資料庫（GR）：同一個 key 對 DCNUM，把文件連結放在 ePMS Link 右邊的 GR Link
+gr_enabled   = true
+gr_server    = UMCD14/UMC
+gr_dbfile    = eop\gr.nsf
+; 第一欄為 DCNUM 的檢視；留空＝公式搜尋（能用但每列要掃一次庫，較慢）
+gr_view      =
+gr_key_field = DCNUM
+; 想順便抓 GR 文件欄位就填，逗號分隔；留空＝只要連結
+gr_fetch_fields =
+
 ; 輸入 Excel：留空＝執行時用命令列給（MatchPmsDocs.exe 檔案.xlsx），也可直接把檔案拖到 exe 上
 input_xlsx   =
 sheet        =

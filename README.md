@@ -1,10 +1,10 @@
 # notes_system_relative_tools — PMS 文件比對（Excel key → Notes 資料 + 分類）
 
-讀一份 Excel，用 `name` 欄（如 `U20251203756`）逐筆到 Notes `eri\pms.nsf` 以 `DOCNO` 查對應文件，抓 `A17 / A21 / A25 / A26`，依 `A17` 的「-」前綴分類（`CUSILPE-B12` → `CUSILPE`），並附上每筆文件的 Notes 連結（＝文件內容 → Meta → Identifier 的 `notes://…`），輸出 xlsx。**唯讀，不修改任何文件。**
+讀一份 Excel，用 `name` 欄（如 `U20251203756`）逐筆到 Notes `eri\pms.nsf` 以 `DOCNO` 查對應文件，抓 `A17 / A21 / A25 / A26`，依 `A17` 的「-」前綴分類（`CUSILPE-B12` → `CUSILPE`），附上文件的 Notes 連結（＝文件內容 → Meta → Identifier 的 `notes://…`）；再到 `UMCD14/UMC` `eop\gr.nsf` 用同一個 key 對 `DCNUM` 找文件、把連結放在右邊的 `GR Link`，輸出 xlsx。**唯讀，不修改任何文件。**
 
 ```
 輸入.xlsx（name 欄）──MatchPmsDocs.exe──▶ 輸入_notes.xlsx
-                                          ├─ 明細：原欄位 + A17/A21/A25/A26 + 機台類別 + Link（可點）
+                                          ├─ 明細：原欄位 + A17/A21/A25/A26 + 機台類別 + ePMS Link + GR Link（可點）
                                           ├─ 分類統計：每類筆數、amt 合計、總計
                                           └─ 每個類別一張工作表
 ```
@@ -49,7 +49,8 @@ MatchPmsDocs.exe 檔案.xlsx --cli --preview 5      # 順便印前 5 列
 | 原表格所有欄位 | 原樣保留（含 `c_costctr, name, description, pum, ttl_qty, amt, 工號, 員工姓名`） |
 | `A17` `A21` `A25` `A26` | Notes 文件欄位原值（`fetch_fields` 可改） |
 | `機台類別` | `A17` 取 `-` 前的字串；沒有 `-` 就整串；查無＝`(查無)` |
-| `Link` | 文件的 `notes://` URL，Excel 裡可直接點開文件 |
+| `ePMS Link` | `eri\pms.nsf` 文件的 `notes://` URL，Excel 裡可直接點開 |
+| `GR Link` | 再到 `UMCD14/UMC` 的 `eop\gr.nsf` 用同一個 `name` 對 `DCNUM` 找到的文件連結；查無則空白（`gr_fetch_fields` 有填時會多出 `GR <欄名>` 欄） |
 
 `分類統計` 工作表依筆數排序，`amt 合計` 用 `amt_column` 指定的欄加總（找不到該欄就只算筆數）。
 
@@ -68,6 +69,11 @@ MatchPmsDocs.exe 檔案.xlsx --cli --preview 5      # 順便印前 5 列
 | `amt_column` | `amt` | 分類統計加總欄 |
 | `output_xlsx` | `<輸入>_notes.xlsx` | 輸出路徑 |
 | `sheet_per_category` | `true` | 是否每類一張工作表 |
+| `gr_enabled` | `true` | 是否做第二段 GR 查詢 |
+| `gr_server` / `gr_dbfile` | `UMCD14/UMC` / `eop\gr.nsf` | GR 資料庫 |
+| `gr_view` | （空） | 第一欄為 DCNUM 的檢視；**留空＝公式搜尋，每列掃一次庫，資料多會慢**。用 `main` branch 的 `ListNotesViews.vbs` 對 `eop\gr.nsf` 列出檢視名後填入可大幅加速 |
+| `gr_key_field` | `DCNUM` | 與 `name` 比對的 GR 欄位 |
+| `gr_fetch_fields` | （空） | 順便抓的 GR 欄位，逗號分隔 |
 
 ---
 
@@ -96,5 +102,6 @@ python -m PyInstaller --onefile --console --clean --name MatchPmsDocs --hidden-i
 ## 常見問題
 
 - **全部 `(查無)`**：先確認 `(ByDocNo)` 檢視第一欄真的是 DOCNO、Excel 的 `name` 值與 Notes `DOCNO` 完全一致（大小寫/空白）。可暫時把 `docno_view` 留空強制走公式搜尋驗證。
+- **GR 查詢很慢**：`gr_view` 沒設時每列都 `db.Search` 掃整個 gr.nsf。請找出依 DCNUM 排序的檢視填進 `gr_view`。
 - **Link 點了沒反應**：該台電腦要有 Notes client 並登入；`notes://` 協定由 Notes 處理。
 - **ini 中文亂碼 / 讀不到**：程式會自動辨識 UTF-8 / Big5；仍有問題就把 ini 另存 UTF-8。

@@ -1,0 +1,20 @@
+; 複製成 match_pms_docs.ini 放在 exe / .py 同資料夾即生效；只需列出要覆蓋的項目。
+[pms]
+server       = UMCD20/UMC
+dbfile       = eri\pms.nsf
+docno_view   = (ByDocNo)
+docno_field  = DOCNO
+fetch_fields = A17,A21,A25,A26
+class_field  = A17
+
+; 輸入 Excel：留空＝執行時用命令列給（MatchPmsDocs.exe 檔案.xlsx），也可直接把檔案拖到 exe 上
+input_xlsx   =
+sheet        =
+key_column   = name
+amt_column   = amt
+header_row   = 1
+
+; 輸出：留空＝<輸入檔名>_notes.xlsx 放同資料夾
+output_xlsx  =
+sheet_per_category = true
+log_file     = match_pms_docs_log.txt

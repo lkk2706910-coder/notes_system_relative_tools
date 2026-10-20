@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+*_log.txt
+match_pms_docs.ini
+*_notes.xlsx

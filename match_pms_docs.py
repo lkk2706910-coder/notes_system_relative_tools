@@ -38,7 +38,8 @@ DEFAULTS = {
     # --- 第二個資料庫（GR）：用同一個 key 對 DCNUM，只取文件連結 ---
     "gr_server":     "UMCD14/UMC",
     "gr_dbfile":     r"eop\gr.nsf",
-    "gr_view":       "",              # 第一欄為 DCNUM 的檢視（可用 ListNotesViews.vbs 查）；留空＝公式搜尋（較慢）
+    # 候選檢視（分號分隔）：啟動時用前幾個 key 逐一驗證「查到的文件 DCNUM == key」，第一個通過的採用；都不行退回公式搜尋
+    "gr_view":       "(ByDocNo);(AllByDocNoOnly);(DocNo);(AllByGRNo);(AllByGRNoV2)",
     "gr_key_field":  "DCNUM",
     "gr_fetch_fields": "",            # 也可順便抓 GR 文件欄位，逗號分隔；留空＝只要連結
     "gr_enabled":    "true",
@@ -316,22 +317,52 @@ class NotesLookup:
             self.replica_id = self.db.ReplicaID
         except Exception:
             self.replica_id = ""
+        self.dbfile = dbfile
         self.view = None
-        if (view_name or "").strip():
-            try:
-                self.view = com_call(self.db, "GetView", view_name)
-                if self.view is None:
-                    logging.warning("[%s] 找不到檢視 %s，改用公式搜尋（較慢）", dbfile, view_name)
-            except Exception as e:
-                logging.warning("[%s] 取得檢視失敗（%s），改用公式搜尋", dbfile, e)
-        else:
-            logging.info("[%s] 未設定檢視，用公式搜尋 %s", dbfile, key_field)
+        self.view_candidates = [v.strip() for v in (view_name or "").split(";") if v.strip()]
+        self.view_checked = False
         self.server = server
         self.fields = [f.strip() for f in (fetch_fields or "").split(",") if f.strip()]
         self.class_field = (class_field or "").strip()
         self.docno_field = key_field
 
+    def pick_view(self, sample_keys):
+        """用樣本 key 驗證候選檢視：GetDocumentByKey 回來的文件 key 欄位要等於 key 才算。"""
+        self.view_checked = True
+        if not self.view_candidates:
+            logging.info("[%s] 未設定檢視，用公式搜尋 %s", self.dbfile, self.docno_field)
+            return
+        samples = [k for k in sample_keys if k][:5]
+        for name in self.view_candidates:
+            try:
+                v = com_call(self.db, "GetView", name)
+            except Exception:
+                v = None
+            if v is None:
+                logging.info("[%s] 檢視 %s 不存在，跳過", self.dbfile, name)
+                continue
+            if not samples:
+                self.view = v
+                logging.info("[%s] 採用檢視 %s（無樣本可驗證）", self.dbfile, name)
+                return
+            hit = 0
+            for k in samples:
+                try:
+                    d = com_call(v, "GetDocumentByKey", k, True)
+                except Exception:
+                    d = None
+                if d is not None and item_text(d, self.docno_field).strip().upper() == k.upper():
+                    hit += 1
+            if hit > 0:
+                self.view = v
+                logging.info("[%s] 採用檢視 %s（樣本 %d/%d 命中）", self.dbfile, name, hit, len(samples))
+                return
+            logging.info("[%s] 檢視 %s 查不到樣本，跳過", self.dbfile, name)
+        logging.warning("[%s] 候選檢視都不適用，改用公式搜尋 %s（較慢）", self.dbfile, self.docno_field)
+
     def find(self, key):
+        if not self.view_checked:
+            self.pick_view([key])
         if self.view is not None:
             try:
                 d = com_call(self.view, "GetDocumentByKey", key, True)
@@ -382,6 +413,10 @@ def run_lookup(cfg, header, data, key_idx, progress=None):
             if h.lower() == amt_name:
                 amt_idx = i
                 break
+    sample_keys = [str(r[key_idx]).strip() for r in data if r[key_idx] is not None and str(r[key_idx]).strip()][:5]
+    lk.pick_view(sample_keys)
+    if gr is not None:
+        gr.pick_view(sample_keys)
     out_rows, found, missing = [], 0, []
     for n, row in enumerate(data, 1):
         key = "" if row[key_idx] is None else str(row[key_idx]).strip()

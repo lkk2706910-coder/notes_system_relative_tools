@@ -11,8 +11,8 @@ class_field  = A17
 gr_enabled   = true
 gr_server    = UMCD14/UMC
 gr_dbfile    = eop\gr.nsf
-; 第一欄為 DCNUM 的檢視；留空＝公式搜尋（能用但每列要掃一次庫，較慢）
-gr_view      =
+; 候選檢視（分號分隔）：啟動時用前幾個 key 驗證，第一個「查得到且 DCNUM 相符」的採用；都不行退回公式搜尋
+gr_view      = (ByDocNo);(AllByDocNoOnly);(DocNo);(AllByGRNo);(AllByGRNoV2)
 gr_key_field = DCNUM
 ; 想順便抓 GR 文件欄位就填，逗號分隔；留空＝只要連結
 gr_fetch_fields =

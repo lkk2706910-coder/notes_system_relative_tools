@@ -71,7 +71,7 @@ MatchPmsDocs.exe 檔案.xlsx --cli --preview 5      # 順便印前 5 列
 | `sheet_per_category` | `true` | 是否每類一張工作表 |
 | `gr_enabled` | `true` | 是否做第二段 GR 查詢 |
 | `gr_server` / `gr_dbfile` | `UMCD14/UMC` / `eop\gr.nsf` | GR 資料庫 |
-| `gr_view` | （空） | 第一欄為 DCNUM 的檢視；**留空＝公式搜尋，每列掃一次庫，資料多會慢**。用 `main` branch 的 `ListNotesViews.vbs` 對 `eop\gr.nsf` 列出檢視名後填入可大幅加速 |
+| `gr_view` | `(ByDocNo);(AllByDocNoOnly);(DocNo);(AllByGRNo);(AllByGRNoV2)` | 候選檢視，分號分隔。啟動時用前幾個 key 逐一驗證（查到的文件 `DCNUM` 要等於 key），第一個通過的採用，log 會印 `採用檢視 …`；都不行才退回公式搜尋（慢） |
 | `gr_key_field` | `DCNUM` | 與 `name` 比對的 GR 欄位 |
 | `gr_fetch_fields` | （空） | 順便抓的 GR 欄位，逗號分隔 |
 
@@ -102,6 +102,6 @@ python -m PyInstaller --onefile --console --clean --name MatchPmsDocs --hidden-i
 ## 常見問題
 
 - **全部 `(查無)`**：先確認 `(ByDocNo)` 檢視第一欄真的是 DOCNO、Excel 的 `name` 值與 Notes `DOCNO` 完全一致（大小寫/空白）。可暫時把 `docno_view` 留空強制走公式搜尋驗證。
-- **GR 查詢很慢**：`gr_view` 沒設時每列都 `db.Search` 掃整個 gr.nsf。請找出依 DCNUM 排序的檢視填進 `gr_view`。
+- **GR 查詢很慢**：log 若出現 `候選檢視都不適用，改用公式搜尋`，表示 `gr_view` 的候選都不是依 DCNUM 排序的檢視；用 `ListNotesViews.vbs` 找出正確的填到 `gr_view` 最前面。
 - **Link 點了沒反應**：該台電腦要有 Notes client 並登入；`notes://` 協定由 Notes 處理。
 - **ini 中文亂碼 / 讀不到**：程式會自動辨識 UTF-8 / Big5；仍有問題就把 ini 另存 UTF-8。

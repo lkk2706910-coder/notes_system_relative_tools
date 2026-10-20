@@ -428,6 +428,15 @@ def run_gui(cfg, base, in_path):
     root.title("PMS 文件比對")
     root.geometry("1280x760")
 
+    def _tk_exc(exc, val, tb):
+        import traceback
+        logging.error("介面錯誤：%s", "".join(traceback.format_exception(exc, val, tb)))
+        try:
+            messagebox.showerror("介面錯誤", "%s\n（詳見 log）" % val)
+        except Exception:
+            pass
+    root.report_callback_exception = _tk_exc
+
     state = {"header": [], "res": None, "include": [], "cat_filter": "（全部）", "out_path": ""}
     q = queue.Queue()
 
@@ -515,9 +524,11 @@ def run_gui(cfg, base, in_path):
     def all_cols():
         return ["✓"] + state["header"] + state["res"]["extra_cols"]
 
+    def col_ids(cols):
+        return ["c%d" % i for i in range(len(cols))]
+
     def refresh_stats():
-        for i in stat_tv.get_children():
-            stat_tv.delete(i)
+        stat_tv.delete(*stat_tv.get_children())
         res = state["res"]
         if not res:
             return
@@ -544,29 +555,43 @@ def run_gui(cfg, base, in_path):
         cat_cb["values"] = cats
         cat_cb.set(cur if cur in cats else "（全部）")
 
+    def row_values(r, inc):
+        return ["✓" if inc else ""] + ["" if v is None else str(v) for v in r]
+
     def fill_table():
-        for i in tv.get_children():
-            tv.delete(i)
-        res = state["res"]
-        if not res:
-            return
-        cols = all_cols()
-        tv["columns"] = cols
-        for c in cols:
-            tv.heading(c, text=c)
-            tv.column(c, width=40 if c == "✓" else (260 if c == "Link" else 110), anchor="center" if c == "✓" else "w")
-        f = cat_cb.get()
-        for idx, (r, inc) in enumerate(zip(res["out_rows"], state["include"])):
-            cat = r[res["cat_idx"]]
-            if f != "（全部）" and cat != f:
-                continue
-            tags = []
-            if cat == "(查無)":
-                tags.append("miss")
-            if not inc:
-                tags.append("off")
-            tv.insert("", "end", iid=str(idx), values=["✓" if inc else ""] + ["" if v is None else v for v in r], tags=tags)
-        refresh_stats()
+        try:
+            tv.delete(*tv.get_children())
+            res = state["res"]
+            if not res:
+                return
+            cols = all_cols()
+            ids = col_ids(cols)
+            tv["columns"] = ids
+            for cid, name in zip(ids, cols):
+                tv.heading(cid, text=name)
+                tv.column(cid, width=40 if name == "✓" else (260 if name == "Link" else 110),
+                          anchor="center" if name == "✓" else "w", stretch=False)
+            f = cat_cb.get()
+            n = 0
+            for idx, (r, inc) in enumerate(zip(res["out_rows"], state["include"])):
+                cat = r[res["cat_idx"]]
+                if f != "（全部）" and cat != f:
+                    continue
+                tags = []
+                if cat == "(查無)":
+                    tags.append("miss")
+                if not inc:
+                    tags.append("off")
+                tv.insert("", "end", iid=str(idx), values=row_values(r, inc), tags=tags)
+                n += 1
+                if n % 200 == 0:
+                    root.update_idletasks()
+            logging.info("表格已填入 %d 列", n)
+            refresh_stats()
+        except Exception as e:
+            import traceback
+            logging.error("填表失敗：%s\n%s", e, traceback.format_exc())
+            messagebox.showerror("填表失敗", "%s\n（詳見 log）" % e)
 
     cat_cb.bind("<<ComboboxSelected>>", lambda e: fill_table())
 
@@ -583,7 +608,7 @@ def run_gui(cfg, base, in_path):
         tags = ["miss"] if r[state["res"]["cat_idx"]] == "(查無)" else []
         if not state["include"][idx]:
             tags.append("off")
-        tv.item(iid, values=["✓" if state["include"][idx] else ""] + ["" if v is None else v for v in r], tags=tags)
+        tv.item(iid, values=row_values(r, state["include"][idx]), tags=tags)
         refresh_stats()
     tv.bind("<Button-1>", on_click)
 
@@ -656,6 +681,14 @@ def run_gui(cfg, base, in_path):
 
     def poll():
         try:
+            _poll_once()
+        except Exception as e:
+            import traceback
+            logging.error("介面更新錯誤：%s\n%s", e, traceback.format_exc())
+        root.after(100, poll)
+
+    def _poll_once():
+        try:
             while True:
                 msg = q.get_nowait()
                 kind = msg[0]
@@ -685,7 +718,6 @@ def run_gui(cfg, base, in_path):
                     btn_run.configure(state="normal")
         except queue.Empty:
             pass
-        root.after(100, poll)
     root.after(100, poll)
 
     # ---- 匯出 ----

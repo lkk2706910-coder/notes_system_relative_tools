@@ -175,6 +175,11 @@ def read_input(path, sheet, header_row, key_col):
     if not rows:
         raise ValueError("工作表沒有資料")
     header = [("" if h is None else str(h)).strip() for h in rows[0]]
+    # 工作表常有格式/篩選範圍延伸到很右邊的空欄，只保留到最後一個有名稱的欄位
+    last = max((i for i, h in enumerate(header) if h), default=-1)
+    if last < 0:
+        raise ValueError("標題列全部空白")
+    header = header[:last + 1]
     try:
         key_idx = [h.lower() for h in header].index(key_col.strip().lower())
     except ValueError:

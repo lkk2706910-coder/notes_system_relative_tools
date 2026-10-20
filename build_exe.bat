@@ -6,9 +6,9 @@ set PY=python
 cd /d "%~dp0"
 %PY% -m pip install --upgrade pywin32 openpyxl pyinstaller || goto :err
 %PY% -c "import pythoncom, pywintypes, win32com.client, openpyxl; import struct; print('deps OK,', struct.calcsize('P')*8, 'bit')" || goto :err
-%PY% -m PyInstaller --onefile --console --clean --name MatchPmsDocs --hidden-import pythoncom --hidden-import pywintypes --hidden-import win32com --hidden-import win32com.client --hidden-import win32com.client.dynamic --hidden-import win32com.client.gencache --hidden-import win32timezone --collect-submodules win32com --collect-submodules openpyxl match_pms_docs.py || goto :err
+%PY% -m PyInstaller --onefile --noconsole --clean --name MatchPmsDocs --hidden-import pythoncom --hidden-import pywintypes --hidden-import win32com --hidden-import win32com.client --hidden-import win32com.client.dynamic --hidden-import win32com.client.gencache --hidden-import win32timezone --collect-submodules win32com --collect-submodules openpyxl match_pms_docs.py || goto :err
 echo.
-echo 完成：dist\MatchPmsDocs.exe   （用法：MatchPmsDocs.exe 檔案.xlsx，或把 xlsx 拖到 exe 上）
+echo 完成：dist\MatchPmsDocs.exe   （雙擊開視窗；或把 xlsx 拖到 exe 上；排程用 MatchPmsDocs.exe 檔案.xlsx --cli）
 endlocal
 goto :eof
 :err

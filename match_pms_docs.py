@@ -12,7 +12,8 @@ match_pms_docs.py
 【唯讀，不修改任何文件】
 
 前置需求：Windows + 已開啟並登入的 Notes client；pip install pywin32 openpyxl
-執行：python match_pms_docs.py [輸入.xlsx] [--preview N]   或打包後 MatchPmsDocs.exe [輸入.xlsx]
+執行：MatchPmsDocs.exe [輸入.xlsx]            → 開視窗：選檔、查詢、逐列確認/修改分類/勾選、再匯出
+      MatchPmsDocs.exe 輸入.xlsx --cli      → 不開視窗，直接查詢並匯出（排程用）
 設定：同資料夾 match_pms_docs.ini 覆蓋 DEFAULTS（見 match_pms_docs.ini.example）；命令列給的輸入檔優先。
 
 結束代碼：0 成功 / 3 信箱開不了 / 4 Notes COM 連不上 / 6 找不到輸入 Excel /
@@ -85,9 +86,10 @@ def setup_logging(path):
     fmt = logging.Formatter("[%(asctime)s] %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S")
     root = logging.getLogger()
     root.setLevel(logging.INFO)
-    sh = logging.StreamHandler(sys.stdout)
-    sh.setFormatter(fmt)
-    root.addHandler(sh)
+    if sys.stdout is not None:
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setFormatter(fmt)
+        root.addHandler(sh)
     try:
         fh = logging.FileHandler(path, encoding="utf-8")
         fh.setFormatter(fmt)
@@ -97,9 +99,10 @@ def setup_logging(path):
 
 
 def cli_input_and_preview():
-    """回傳 (輸入檔路徑或 "", 預覽列數或 0)。用法：[輸入.xlsx] [--preview [N]]"""
+    """回傳 (輸入檔路徑或 "", 預覽列數或 0, 是否 --cli)。用法：[輸入.xlsx] [--preview [N]] [--cli]"""
     args = sys.argv[1:]
     preview = 0
+    cli = "--cli" in args
     files = []
     i = 0
     while i < len(args):
@@ -115,7 +118,7 @@ def cli_input_and_preview():
         if not a.startswith("--"):
             files.append(a)
         i += 1
-    return (files[0] if files else ""), preview
+    return (files[0] if files else ""), preview, cli
 
 
 # ---------- Notes helpers ----------
@@ -261,80 +264,90 @@ def write_output(path, header, out_rows, extra_cols, cat_idx, link_idx, amt_idx,
     wb.save(path)
 
 
-# ---------- 主流程 ----------
+# ---------- 查詢引擎（CLI 與 GUI 共用） ----------
 
-def main():
-    cfg = load_config()
-    base = app_dir()
-    cli_in, preview = cli_input_and_preview()
-    in_path = abs_path(base, cli_in or cfg["input_xlsx"])
-    setup_logging(abs_path(base, cfg["log_file"]))
+class LookupError_(Exception):
+    def __init__(self, code, msg):
+        super().__init__(msg)
+        self.code = code
 
-    if not in_path or not os.path.isfile(in_path):
-        logging.error("找不到輸入 Excel：%s（命令列給路徑，或在 ini 設 input_xlsx）", in_path or "(未指定)")
-        return 6
 
-    try:
-        header, data, key_idx = read_input(in_path, cfg["sheet"], int(cfg["header_row"] or 1), cfg["key_column"])
-    except Exception as e:
-        logging.error("讀取 Excel 失敗：%s", e)
-        return 7
-    logging.info("輸入：%s，%d 列，key 欄「%s」", in_path, len(data), header[key_idx])
+class NotesLookup:
+    """連 Notes、依 DOCNO 找文件。要在使用它的那條執行緒內建立（COM 綁執行緒）。"""
 
-    try:
-        import win32com.client
-        ns = win32com.client.Dispatch("Notes.NotesSession")
-    except Exception as e:
-        logging.error("無法建立 Notes.NotesSession（Notes 未開/未登入？pywin32 未裝？位元數不符？）: %s", e)
-        return 4
-
-    server, dbfile = cfg["server"], cfg["dbfile"]
-    try:
-        db = com_call(ns, "GetDatabase", server, dbfile)
-        if not db.IsOpen:
-            com_call(db, "Open", server, dbfile)
-        if not db.IsOpen:
-            raise RuntimeError("IsOpen=False")
-    except Exception as e:
-        logging.error("無法開啟資料庫 [%s] %s: %s", server, dbfile, e)
-        return 3
-    try:
-        replica_id = db.ReplicaID
-    except Exception:
-        replica_id = ""
-
-    view = None
-    try:
-        view = com_call(db, "GetView", cfg["docno_view"])
-        if view is None:
-            logging.warning("找不到檢視 %s，改用公式搜尋（較慢）", cfg["docno_view"])
-    except Exception as e:
-        logging.warning("取得檢視失敗（%s），改用公式搜尋", e)
-        view = None
-
-    docno_field = cfg["docno_field"]
-    fetch_fields = [f.strip() for f in cfg["fetch_fields"].split(",") if f.strip()]
-    class_field = cfg["class_field"].strip()
-
-    def find_doc(key):
-        if view is not None:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+        except Exception:
+            pass
+        try:
+            import win32com.client
+            self.ns = win32com.client.Dispatch("Notes.NotesSession")
+        except Exception as e:
+            raise LookupError_(4, "無法建立 Notes.NotesSession（Notes 未開/未登入？pywin32 未裝？位元數不符？）: %s" % e)
+        server, dbfile = cfg["server"], cfg["dbfile"]
+        try:
+            self.db = com_call(self.ns, "GetDatabase", server, dbfile)
+            if not self.db.IsOpen:
+                com_call(self.db, "Open", server, dbfile)
+            if not self.db.IsOpen:
+                raise RuntimeError("IsOpen=False")
+        except Exception as e:
+            raise LookupError_(3, "無法開啟資料庫 [%s] %s: %s" % (server, dbfile, e))
+        try:
+            self.replica_id = self.db.ReplicaID
+        except Exception:
+            self.replica_id = ""
+        self.view = None
+        if cfg["docno_view"].strip():
             try:
-                d = com_call(view, "GetDocumentByKey", key, True)
+                self.view = com_call(self.db, "GetView", cfg["docno_view"])
+                if self.view is None:
+                    logging.warning("找不到檢視 %s，改用公式搜尋（較慢）", cfg["docno_view"])
+            except Exception as e:
+                logging.warning("取得檢視失敗（%s），改用公式搜尋", e)
+        self.server = server
+        self.fields = [f.strip() for f in cfg["fetch_fields"].split(",") if f.strip()]
+        self.class_field = cfg["class_field"].strip()
+        self.docno_field = cfg["docno_field"]
+
+    def find(self, key):
+        if self.view is not None:
+            try:
+                d = com_call(self.view, "GetDocumentByKey", key, True)
                 if d is not None:
                     return d
             except Exception:
                 pass
-        formula = '%s = "%s"' % (docno_field, key.replace('"', '""'))
+        formula = '%s = "%s"' % (self.docno_field, key.replace('"', '""'))
         try:
-            dc = com_call(db, "Search", formula, None, 1)
+            dc = com_call(self.db, "Search", formula, None, 1)
             if dc.Count > 0:
                 return com_call(dc, "GetFirstDocument")
         except Exception as e:
             logging.warning("公式搜尋失敗 %s: %s", key, e)
         return None
 
-    extra_cols = fetch_fields + ["機台類別", "Link"]
-    cat_idx = len(header) + len(fetch_fields)
+    def lookup_row(self, key):
+        """回傳 (vals, cat, link, found)"""
+        if not key:
+            return [""] * len(self.fields), "(查無)", "", False
+        d = self.find(key)
+        if d is None:
+            return [""] * len(self.fields), "(查無)", "", False
+        vals = [item_text(d, f) for f in self.fields]
+        cat = class_of(item_text(d, self.class_field))
+        return vals, cat, doc_link(d, self.server, self.replica_id), True
+
+
+def run_lookup(cfg, header, data, key_idx, progress=None):
+    """對每列查 Notes。回傳 dict(out_rows, found, missing, extra_cols, cat_idx, link_idx, amt_idx)。
+    progress(n, total, found) 可選。"""
+    lk = NotesLookup(cfg)
+    extra_cols = lk.fields + ["機台類別", "Link"]
+    cat_idx = len(header) + len(lk.fields)
     link_idx = cat_idx + 1
     amt_idx = None
     amt_name = cfg["amt_column"].strip().lower()
@@ -343,46 +356,389 @@ def main():
             if h.lower() == amt_name:
                 amt_idx = i
                 break
-
     out_rows, found, missing = [], 0, []
     for n, row in enumerate(data, 1):
         key = "" if row[key_idx] is None else str(row[key_idx]).strip()
-        vals = [""] * len(fetch_fields)
-        cat, link = "(查無)", ""
-        if key:
-            d = find_doc(key)
-            if d is not None:
-                found += 1
-                vals = [item_text(d, f) for f in fetch_fields]
-                cat = class_of(item_text(d, class_field))
-                link = doc_link(d, server, replica_id)
-            else:
-                missing.append(key)
+        vals, cat, link, ok = lk.lookup_row(key)
+        if ok:
+            found += 1
+        elif key:
+            missing.append(key)
         out_rows.append(list(row) + vals + [cat, link])
-        if n % 50 == 0:
-            sys.stdout.write("\r  處理中… %d/%d，命中 %d" % (n, len(data), found))
+        if progress and (n % 10 == 0 or n == len(data)):
+            progress(n, len(data), found)
+    return {"out_rows": out_rows, "found": found, "missing": missing, "extra_cols": extra_cols,
+            "cat_idx": cat_idx, "link_idx": link_idx, "amt_idx": amt_idx}
+
+
+# ---------- CLI ----------
+
+def run_cli(cfg, base, in_path, preview):
+    if not in_path or not os.path.isfile(in_path):
+        logging.error("找不到輸入 Excel：%s（命令列給路徑，或在 ini 設 input_xlsx）", in_path or "(未指定)")
+        return 6
+    try:
+        header, data, key_idx = read_input(in_path, cfg["sheet"], int(cfg["header_row"] or 1), cfg["key_column"])
+    except Exception as e:
+        logging.error("讀取 Excel 失敗：%s", e)
+        return 7
+    logging.info("輸入：%s，%d 列，key 欄「%s」", in_path, len(data), header[key_idx])
+
+    def prog(n, total, found):
+        if sys.stdout is not None:
+            sys.stdout.write("\r  處理中… %d/%d，命中 %d" % (n, total, found))
             sys.stdout.flush()
-    if len(data) >= 50:
+    try:
+        res = run_lookup(cfg, header, data, key_idx, prog)
+    except LookupError_ as e:
+        logging.error("%s", e)
+        return e.code
+    if sys.stdout is not None and data:
         sys.stdout.write("\n")
 
+    out_rows = res["out_rows"]
     if preview:
         logging.info("預覽（前 %d 列）：", min(preview, len(out_rows)))
-        logging.info("  %s", " | ".join(header + extra_cols))
+        logging.info("  %s", " | ".join(header + res["extra_cols"]))
         for r in out_rows[:preview]:
             logging.info("  %s", " | ".join("" if v is None else str(v) for v in r))
 
     out_path = abs_path(base, cfg["output_xlsx"]) or os.path.splitext(in_path)[0] + "_notes.xlsx"
     try:
-        write_output(out_path, header, out_rows, extra_cols, cat_idx, link_idx, amt_idx,
+        write_output(out_path, header, out_rows, res["extra_cols"], res["cat_idx"], res["link_idx"], res["amt_idx"],
                      cfg["sheet_per_category"].lower() in ("1", "true", "yes"))
     except Exception as e:
         logging.error("寫入 %s 失敗（檔案是否開著？）: %s", out_path, e)
         return 8
-
-    logging.info("OK %d 列，命中 %d，查無 %d；輸出 %s", len(data), found, len(missing), out_path)
-    if missing:
-        logging.info("查無的 key（前 20）：%s", ", ".join(missing[:20]))
+    logging.info("OK %d 列，命中 %d，查無 %d；輸出 %s", len(data), res["found"], len(res["missing"]), out_path)
+    if res["missing"]:
+        logging.info("查無的 key（前 20）：%s", ", ".join(res["missing"][:20]))
     return 0
+
+
+# ---------- GUI ----------
+
+def run_gui(cfg, base, in_path):
+    import threading
+    import queue
+    import tkinter as tk
+    from tkinter import ttk, filedialog, messagebox
+
+    root = tk.Tk()
+    root.title("PMS 文件比對")
+    root.geometry("1280x760")
+
+    state = {"header": [], "res": None, "include": [], "cat_filter": "（全部）", "out_path": ""}
+    q = queue.Queue()
+
+    # ---- 上方：檔案 / 查詢 ----
+    top = ttk.Frame(root, padding=8)
+    top.pack(fill="x")
+    ttk.Label(top, text="輸入 Excel：").pack(side="left")
+    path_var = tk.StringVar(value=in_path or "")
+    ent = ttk.Entry(top, textvariable=path_var, width=70)
+    ent.pack(side="left", padx=4)
+
+    def browse():
+        p = filedialog.askopenfilename(title="選擇 Excel", filetypes=[("Excel", "*.xlsx *.xlsm"), ("所有檔案", "*.*")])
+        if p:
+            path_var.set(p)
+    ttk.Button(top, text="瀏覽…", command=browse).pack(side="left")
+    btn_run = ttk.Button(top, text="查詢 Notes")
+    btn_run.pack(side="left", padx=(12, 4))
+    btn_export = ttk.Button(top, text="匯出 Excel…", state="disabled")
+    btn_export.pack(side="left")
+    btn_open = ttk.Button(top, text="開啟輸出檔", state="disabled")
+    btn_open.pack(side="left", padx=4)
+
+    bar = ttk.Progressbar(root, mode="determinate")
+    bar.pack(fill="x", padx=8)
+    status = ttk.Label(root, text="請選擇 Excel 後按「查詢 Notes」", padding=(8, 2))
+    status.pack(fill="x")
+
+    # ---- 中間：左表格 / 右統計 ----
+    mid = ttk.PanedWindow(root, orient="horizontal")
+    mid.pack(fill="both", expand=True, padx=8, pady=4)
+
+    left = ttk.Frame(mid)
+    mid.add(left, weight=4)
+    filt_bar = ttk.Frame(left)
+    filt_bar.pack(fill="x")
+    ttk.Label(filt_bar, text="只看類別：").pack(side="left")
+    cat_cb = ttk.Combobox(filt_bar, state="readonly", width=20, values=["（全部）"])
+    cat_cb.current(0)
+    cat_cb.pack(side="left")
+    ttk.Label(filt_bar, text="   ✓ 欄點一下可切換是否匯出；雙擊「機台類別」可修改；雙擊 Link 開啟 Notes 文件",
+              foreground="#667").pack(side="left")
+
+    tv_frame = ttk.Frame(left)
+    tv_frame.pack(fill="both", expand=True)
+    tv = ttk.Treeview(tv_frame, show="headings", selectmode="browse")
+    vsb = ttk.Scrollbar(tv_frame, orient="vertical", command=tv.yview)
+    hsb = ttk.Scrollbar(tv_frame, orient="horizontal", command=tv.xview)
+    tv.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+    tv.grid(row=0, column=0, sticky="nsew")
+    vsb.grid(row=0, column=1, sticky="ns")
+    hsb.grid(row=1, column=0, sticky="ew")
+    tv_frame.rowconfigure(0, weight=1)
+    tv_frame.columnconfigure(0, weight=1)
+    tv.tag_configure("miss", foreground="#b91c1c")
+    tv.tag_configure("off", foreground="#9ca3af")
+
+    right = ttk.Frame(mid)
+    mid.add(right, weight=1)
+    ttk.Label(right, text="分類統計（勾選中的列）", font=("", 10, "bold")).pack(anchor="w")
+    stat_tv = ttk.Treeview(right, columns=("cat", "n", "amt"), show="headings", height=20)
+    for c, w, t in (("cat", 140, "機台類別"), ("n", 60, "筆數"), ("amt", 110, "amt 合計")):
+        stat_tv.heading(c, text=t)
+        stat_tv.column(c, width=w, anchor="e" if c != "cat" else "w")
+    stat_tv.pack(fill="both", expand=True)
+
+    # ---- 下方：log ----
+    log_box = tk.Text(root, height=6, state="disabled", font=("Consolas", 9))
+    log_box.pack(fill="x", padx=8, pady=(0, 8))
+
+    class TkLogHandler(logging.Handler):
+        def emit(self, record):
+            q.put(("log", self.format(record)))
+    h = TkLogHandler()
+    h.setFormatter(logging.Formatter("[%(asctime)s] %(message)s", "%H:%M:%S"))
+    logging.getLogger().addHandler(h)
+
+    def log_line(text):
+        log_box.configure(state="normal")
+        log_box.insert("end", text + "\n")
+        log_box.see("end")
+        log_box.configure(state="disabled")
+
+    # ---- 表格填充 / 統計 ----
+    def all_cols():
+        return ["✓"] + state["header"] + state["res"]["extra_cols"]
+
+    def refresh_stats():
+        for i in stat_tv.get_children():
+            stat_tv.delete(i)
+        res = state["res"]
+        if not res:
+            return
+        stats = {}
+        for r, inc in zip(res["out_rows"], state["include"]):
+            if not inc:
+                continue
+            s = stats.setdefault(r[res["cat_idx"]], [0, 0.0])
+            s[0] += 1
+            if res["amt_idx"] is not None:
+                try:
+                    s[1] += float(r[res["amt_idx"]] or 0)
+                except (TypeError, ValueError):
+                    pass
+        tn, ta = 0, 0.0
+        for cat in sorted(stats, key=lambda k: (-stats[k][0], k)):
+            n, a = stats[cat]
+            tn += n
+            ta += a
+            stat_tv.insert("", "end", values=(cat, n, "{:,.0f}".format(a)))
+        stat_tv.insert("", "end", values=("總計", tn, "{:,.0f}".format(ta)))
+        cats = ["（全部）"] + sorted(stats)
+        cur = cat_cb.get()
+        cat_cb["values"] = cats
+        cat_cb.set(cur if cur in cats else "（全部）")
+
+    def fill_table():
+        for i in tv.get_children():
+            tv.delete(i)
+        res = state["res"]
+        if not res:
+            return
+        cols = all_cols()
+        tv["columns"] = cols
+        for c in cols:
+            tv.heading(c, text=c)
+            tv.column(c, width=40 if c == "✓" else (260 if c == "Link" else 110), anchor="center" if c == "✓" else "w")
+        f = cat_cb.get()
+        for idx, (r, inc) in enumerate(zip(res["out_rows"], state["include"])):
+            cat = r[res["cat_idx"]]
+            if f != "（全部）" and cat != f:
+                continue
+            tags = []
+            if cat == "(查無)":
+                tags.append("miss")
+            if not inc:
+                tags.append("off")
+            tv.insert("", "end", iid=str(idx), values=["✓" if inc else ""] + ["" if v is None else v for v in r], tags=tags)
+        refresh_stats()
+
+    cat_cb.bind("<<ComboboxSelected>>", lambda e: fill_table())
+
+    def on_click(event):
+        if tv.identify("region", event.x, event.y) != "cell":
+            return
+        col = tv.identify_column(event.x)
+        iid = tv.identify_row(event.y)
+        if not iid or col != "#1":
+            return
+        idx = int(iid)
+        state["include"][idx] = not state["include"][idx]
+        r = state["res"]["out_rows"][idx]
+        tags = ["miss"] if r[state["res"]["cat_idx"]] == "(查無)" else []
+        if not state["include"][idx]:
+            tags.append("off")
+        tv.item(iid, values=["✓" if state["include"][idx] else ""] + ["" if v is None else v for v in r], tags=tags)
+        refresh_stats()
+    tv.bind("<Button-1>", on_click)
+
+    def on_dblclick(event):
+        if tv.identify("region", event.x, event.y) != "cell":
+            return
+        col = tv.identify_column(event.x)
+        iid = tv.identify_row(event.y)
+        if not iid:
+            return
+        ci = int(col[1:]) - 1
+        cols = all_cols()
+        res = state["res"]
+        idx = int(iid)
+        if cols[ci] == "Link":
+            link = res["out_rows"][idx][res["link_idx"]]
+            if link:
+                try:
+                    os.startfile(link)
+                except Exception as e:
+                    messagebox.showwarning("開啟失敗", str(e))
+            return
+        if cols[ci] == "機台類別":
+            x, y, w, hgt = tv.bbox(iid, col)
+            e = ttk.Entry(tv)
+            e.place(x=x, y=y, width=w, height=hgt)
+            e.insert(0, res["out_rows"][idx][res["cat_idx"]])
+            e.focus_set()
+            e.select_range(0, "end")
+
+            def commit(_=None):
+                res["out_rows"][idx][res["cat_idx"]] = e.get().strip() or "(空白)"
+                e.destroy()
+                fill_table()
+            e.bind("<Return>", commit)
+            e.bind("<FocusOut>", commit)
+            e.bind("<Escape>", lambda _: e.destroy())
+    tv.bind("<Double-1>", on_dblclick)
+
+    # ---- 查詢（背景執行緒） ----
+    def do_run():
+        p = path_var.get().strip()
+        if not p or not os.path.isfile(p):
+            messagebox.showerror("找不到檔案", "請先選擇存在的 Excel 檔")
+            return
+        try:
+            header, data, key_idx = read_input(p, cfg["sheet"], int(cfg["header_row"] or 1), cfg["key_column"])
+        except Exception as e:
+            messagebox.showerror("讀取 Excel 失敗", str(e))
+            return
+        state["header"] = header
+        btn_run.configure(state="disabled")
+        btn_export.configure(state="disabled")
+        bar["maximum"] = max(len(data), 1)
+        bar["value"] = 0
+        status.configure(text="查詢中… 0/%d" % len(data))
+        logging.info("輸入：%s，%d 列，key 欄「%s」", p, len(data), header[key_idx])
+
+        def worker():
+            try:
+                res = run_lookup(cfg, header, data, key_idx, lambda n, t, f: q.put(("prog", n, t, f)))
+                q.put(("done", res))
+            except LookupError_ as e:
+                q.put(("err", str(e)))
+            except Exception as e:
+                q.put(("err", "查詢發生錯誤：%s" % e))
+        threading.Thread(target=worker, daemon=True).start()
+
+    btn_run.configure(command=do_run)
+
+    def poll():
+        try:
+            while True:
+                msg = q.get_nowait()
+                kind = msg[0]
+                if kind == "log":
+                    log_line(msg[1])
+                elif kind == "prog":
+                    _, n, t, f = msg
+                    bar["value"] = n
+                    status.configure(text="查詢中… %d/%d，命中 %d" % (n, t, f))
+                elif kind == "done":
+                    res = msg[1]
+                    state["res"] = res
+                    state["include"] = [True] * len(res["out_rows"])
+                    bar["value"] = bar["maximum"]
+                    status.configure(text="完成：%d 列，命中 %d，查無 %d。請逐列確認後按「匯出 Excel…」"
+                                     % (len(res["out_rows"]), res["found"], len(res["missing"])))
+                    logging.info("查詢完成：%d 列，命中 %d，查無 %d", len(res["out_rows"]), res["found"], len(res["missing"]))
+                    if res["missing"]:
+                        logging.info("查無的 key（前 20）：%s", ", ".join(res["missing"][:20]))
+                    fill_table()
+                    btn_run.configure(state="normal")
+                    btn_export.configure(state="normal")
+                elif kind == "err":
+                    status.configure(text="失敗：" + msg[1])
+                    logging.error("%s", msg[1])
+                    messagebox.showerror("查詢失敗", msg[1])
+                    btn_run.configure(state="normal")
+        except queue.Empty:
+            pass
+        root.after(100, poll)
+    root.after(100, poll)
+
+    # ---- 匯出 ----
+    def do_export():
+        res = state["res"]
+        if not res:
+            return
+        rows = [r for r, inc in zip(res["out_rows"], state["include"]) if inc]
+        if not rows:
+            messagebox.showwarning("沒有資料", "沒有勾選任何列")
+            return
+        default = abs_path(base, cfg["output_xlsx"]) or os.path.splitext(path_var.get().strip())[0] + "_notes.xlsx"
+        p = filedialog.asksaveasfilename(title="匯出 Excel", defaultextension=".xlsx",
+                                         initialfile=os.path.basename(default), initialdir=os.path.dirname(default),
+                                         filetypes=[("Excel", "*.xlsx")])
+        if not p:
+            return
+        try:
+            write_output(p, state["header"], rows, res["extra_cols"], res["cat_idx"], res["link_idx"], res["amt_idx"],
+                         cfg["sheet_per_category"].lower() in ("1", "true", "yes"))
+        except Exception as e:
+            messagebox.showerror("匯出失敗", "寫入 %s 失敗（檔案是否開著？）\n%s" % (p, e))
+            return
+        state["out_path"] = p
+        btn_open.configure(state="normal")
+        status.configure(text="已匯出 %d 列到 %s" % (len(rows), p))
+        logging.info("已匯出 %d 列（共 %d 列，排除 %d）到 %s", len(rows), len(res["out_rows"]), len(res["out_rows"]) - len(rows), p)
+        if messagebox.askyesno("匯出完成", "已匯出 %d 列。\n要現在開啟嗎？" % len(rows)):
+            try:
+                os.startfile(p)
+            except Exception as e:
+                messagebox.showwarning("開啟失敗", str(e))
+
+    btn_export.configure(command=do_export)
+    btn_open.configure(command=lambda: os.startfile(state["out_path"]) if state["out_path"] else None)
+
+    if in_path and os.path.isfile(in_path):
+        root.after(300, do_run)
+    root.mainloop()
+    return 0
+
+
+# ---------- 主流程 ----------
+
+def main():
+    cfg = load_config()
+    base = app_dir()
+    cli_in, preview, cli = cli_input_and_preview()
+    in_path = abs_path(base, cli_in or cfg["input_xlsx"])
+    setup_logging(abs_path(base, cfg["log_file"]))
+    if cli:
+        return run_cli(cfg, base, in_path, preview)
+    return run_gui(cfg, base, in_path)
 
 
 if __name__ == "__main__":

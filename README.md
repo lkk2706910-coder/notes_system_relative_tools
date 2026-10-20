@@ -15,11 +15,30 @@ AI agent 工作指南見 [`AGENTS.md`](AGENTS.md)；其他通用 Notes 工具在
 
 ## 用法
 
+### 視窗模式（預設）
+
+雙擊 `MatchPmsDocs.exe`（或把 xlsx 拖到 exe 上、或 `MatchPmsDocs.exe 檔案.xlsx`）會開一個視窗：
+
+1. **輸入 Excel** → 瀏覽選檔（拖檔進來的會自動帶入並開始查）。
+2. **查詢 Notes** → 背景逐筆查，進度條與狀態列顯示「n/總數，命中 m」；查完表格列出所有欄位（原欄位 + A17/A21/A25/A26 + 機台類別 + Link）。
+3. **逐列確認**：
+   - `✓` 欄點一下 → 切換該列**要不要匯出**（排除的列變灰）
+   - 雙擊 **機台類別** 儲存格 → 直接改分類（Enter 確定、Esc 取消），右側統計即時更新
+   - 雙擊 **Link** → 用 Notes 開啟該文件核對
+   - 「只看類別」下拉 → 只顯示某一類；查無的列紅字
+   - 右側 **分類統計** 只計算勾選中的列
+4. **匯出 Excel…** → 選存檔位置（預設 `<輸入>_notes.xlsx`），只匯出勾選的列；完成可直接開啟。
+5. 最下方是 log，同時也寫到 exe 同資料夾 `match_pms_docs_log.txt`。
+
+### 命令列模式（排程 / 不需確認）
+
 ```bat
-MatchPmsDocs.exe 檔案.xlsx
-MatchPmsDocs.exe 檔案.xlsx --preview 5      # 順便在畫面印前 5 列結果
+MatchPmsDocs.exe 檔案.xlsx --cli
+MatchPmsDocs.exe 檔案.xlsx --cli --preview 5      # 順便印前 5 列
 ```
-也可以直接把 xlsx **拖到 exe 上**。前提：Notes client 已開啟並登入。輸出預設為 `<輸入檔名>_notes.xlsx` 放同資料夾，log 在 exe 同資料夾 `match_pms_docs_log.txt`。
+不開視窗，直接查詢並匯出到 `<輸入>_notes.xlsx`。exe 是 `--noconsole` 打包，此模式的訊息看 log 檔。
+
+前提：Notes client 已開啟並登入。
 
 查詢方式：先用 `(ByDocNo)` 檢視 `GetDocumentByKey` 精準查（快）；查不到或檢視不存在時退回公式 `DOCNO = "…"` 搜尋。Excel 裡 key 空白或 Notes 查無的列，`機台類別` 標 `(查無)`、其餘新欄留空，log 會列出查無的 key。
 

@@ -360,9 +360,38 @@ class NotesLookup:
             logging.info("[%s] 檢視 %s 查不到樣本，跳過", self.dbfile, name)
         logging.warning("[%s] 候選檢視都不適用，改用公式搜尋 %s（較慢）", self.dbfile, self.docno_field)
 
+    def prefetch(self, keys, chunk=150):
+        """沒有可用檢視時：用 @IsMember 一次把一批 key 的文件撈回來快取，整個庫只掃 ceil(n/chunk) 次。"""
+        self.cache = {}
+        keys = sorted({k.strip() for k in keys if k and k.strip()})
+        if not keys:
+            return
+        if not hasattr(self, "_since"):
+            self._since = com_call(self.ns, "CreateDateTime", "01/01/1980")
+        got = 0
+        for i in range(0, len(keys), chunk):
+            part = keys[i:i + chunk]
+            lst = ":".join('"%s"' % k.replace('"', '""') for k in part)
+            formula = '@IsMember(@Text(%s); %s)' % (self.docno_field, lst)
+            try:
+                dc = com_call(self.db, "Search", formula, self._since, 0)
+                d = com_call(dc, "GetFirstDocument")
+                while d is not None:
+                    k = item_text(d, self.docno_field).strip()
+                    if k and k.upper() not in self.cache:
+                        self.cache[k.upper()] = d
+                        got += 1
+                    d = com_call(dc, "GetNextDocument", d)
+            except Exception as e:
+                logging.warning("[%s] 批次公式搜尋失敗（第 %d 批）：%s", self.dbfile, i // chunk + 1, e)
+        logging.info("[%s] 批次公式搜尋：%d 個 key → 撈到 %d 筆", self.dbfile, len(keys), got)
+
     def find(self, key):
         if not self.view_checked:
             self.pick_view([key])
+        cache = getattr(self, "cache", None)
+        if cache is not None:
+            return cache.get(key.strip().upper())
         if self.view is not None:
             try:
                 d = com_call(self.view, "GetDocumentByKey", key, True)
@@ -416,10 +445,14 @@ def run_lookup(cfg, header, data, key_idx, progress=None):
             if h.lower() == amt_name:
                 amt_idx = i
                 break
-    sample_keys = [str(r[key_idx]).strip() for r in data if r[key_idx] is not None and str(r[key_idx]).strip()][:5]
-    lk.pick_view(sample_keys)
-    if gr is not None:
-        gr.pick_view(sample_keys)
+    all_keys = [str(r[key_idx]).strip() for r in data if r[key_idx] is not None and str(r[key_idx]).strip()]
+    sample_keys = all_keys[:5]
+    for lookup in ([lk] + ([gr] if gr is not None else [])):
+        lookup.pick_view(sample_keys)
+        if lookup.view is None:
+            if progress:
+                progress(0, len(data), 0)
+            lookup.prefetch(all_keys)
     out_rows, found, missing = [], 0, []
     for n, row in enumerate(data, 1):
         key = "" if row[key_idx] is None else str(row[key_idx]).strip()

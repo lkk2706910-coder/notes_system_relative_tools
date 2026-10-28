@@ -31,10 +31,17 @@ DEFAULTS = {
     # --- Notes ---
     "server":        "UMCD20/UMC",
     "dbfile":        r"eri\pms.nsf",
-    "docno_view":    "(ByDocNo)",     # 第一欄為 DOCNO 的檢視；查不到會退回公式搜尋
+    "docno_view":    "(ByDocNo)",     # 第一欄為 DOCNO 的檢視；查不到會退回公式搜尋（只對 DOCNO 搜尋有用）
     "docno_field":   "DOCNO",
-    "fetch_fields":  "A17,A21,A25,A26",
+    # 搜尋依據：Excel key 欄要對 ePMS 的哪個欄位。可選 DOCNO / A21(material) / A22(原廠料號)
+    "epms_key_field": "DOCNO",
+    "epms_key_options": "DOCNO,A21,A22",
+    # A21 / A22 / VendorNameList 一定會帶出（不在這裡也會自動補上）
+    "fetch_fields":  "A17,A21,A22,A25,A26,VendorNameList",
     "class_field":   "A17",           # 用哪個欄位分類
+    "epms_enabled":  "true",
+    # 用 A21/A22 搜尋時一個 key 可能對到多筆：all＝每筆各一列（Excel 原欄位重複）；first＝只取第一筆
+    "multi_match":   "all",
     # --- 第二個資料庫（GR）：用同一個 key 對 DCNUM，只取文件連結 ---
     "gr_server":     "UMCD14/UMC",
     "gr_dbfile":     r"eop\gr.nsf",
@@ -108,14 +115,28 @@ def setup_logging(path):
 
 
 def cli_input_and_preview():
-    """回傳 (輸入檔路徑或 "", 預覽列數或 0, 是否 --cli)。用法：[輸入.xlsx] [--preview [N]] [--cli]"""
+    """回傳 (輸入檔路徑或 "", 預覽列數或 0, 是否 --cli, opts)。
+    用法：[輸入.xlsx] [--preview [N]] [--cli] [--key DOCNO|A21|A22] [--no-epms] [--no-gr]"""
     args = sys.argv[1:]
     preview = 0
     cli = "--cli" in args
+    opts = {"key": None, "epms": None, "gr": None}
     files = []
     i = 0
     while i < len(args):
         a = args[i]
+        if a == "--key" and i + 1 < len(args):
+            opts["key"] = args[i + 1]
+            i += 2
+            continue
+        if a == "--no-epms":
+            opts["epms"] = False
+            i += 1
+            continue
+        if a == "--no-gr":
+            opts["gr"] = False
+            i += 1
+            continue
         if a == "--preview":
             if i + 1 < len(args) and args[i + 1].isdigit():
                 preview = int(args[i + 1])
@@ -127,7 +148,7 @@ def cli_input_and_preview():
         if not a.startswith("--"):
             files.append(a)
         i += 1
-    return (files[0] if files else ""), preview, cli
+    return (files[0] if files else ""), preview, cli, opts
 
 
 # ---------- Notes helpers ----------
@@ -163,6 +184,21 @@ def doc_link(doc, server, replica_id):
         return "notes://%s/%s/0/%s" % (server, replica_id, doc.UniversalID)
     except Exception:
         return ""
+
+
+def ensure_fields(fields_csv, must):
+    """確保 must 裡的欄位都在清單中（保留原順序、去重，缺的補在後面）"""
+    fields, low = [], set()
+    for f in (fields_csv or "").split(","):
+        f = f.strip()
+        if f and f.lower() not in low:
+            fields.append(f)
+            low.add(f.lower())
+    for m in must:
+        if m.lower() not in low:
+            fields.append(m)
+            low.add(m.lower())
+    return ",".join(fields)
 
 
 def class_of(value):
@@ -236,6 +272,10 @@ def write_output(path, header, out_rows, extra_cols, cat_idx, link_idx, amt_idx,
     ws = wb.active
     ws.title = "明細"
     put_sheet(ws, out_rows)
+
+    if cat_idx is None:          # 沒比對 ePMS 就沒有分類
+        wb.save(path)
+        return
 
     # 分類統計
     stats = {}
@@ -361,7 +401,8 @@ class NotesLookup:
         logging.warning("[%s] 候選檢視都不適用，改用公式搜尋 %s（較慢）", self.dbfile, self.docno_field)
 
     def prefetch(self, keys, chunk=150):
-        """沒有可用檢視時：用 @IsMember 一次把一批 key 的文件撈回來快取，整個庫只掃 ceil(n/chunk) 次。"""
+        """沒有可用檢視時：用 @IsMember 一次把一批 key 的文件撈回來快取，整個庫只掃 ceil(n/chunk) 次。
+        cache: key(upper) -> [doc, ...]（同 key 可多筆）"""
         self.cache = {}
         keys = sorted({k.strip() for k in keys if k and k.strip()})
         if not keys:
@@ -378,66 +419,118 @@ class NotesLookup:
                 d = com_call(dc, "GetFirstDocument")
                 while d is not None:
                     k = item_text(d, self.docno_field).strip()
-                    if k and k.upper() not in self.cache:
-                        self.cache[k.upper()] = d
+                    if k:
+                        self.cache.setdefault(k.upper(), []).append(d)
                         got += 1
                     d = com_call(dc, "GetNextDocument", d)
             except Exception as e:
                 logging.warning("[%s] 批次公式搜尋失敗（第 %d 批）：%s", self.dbfile, i // chunk + 1, e)
         logging.info("[%s] 批次公式搜尋：%d 個 key → 撈到 %d 筆", self.dbfile, len(keys), got)
 
-    def find(self, key):
+    def find_all(self, key):
+        """回傳符合 key 的所有文件（list）。"""
         if not self.view_checked:
             self.pick_view([key])
         cache = getattr(self, "cache", None)
         if cache is not None:
-            return cache.get(key.strip().upper())
+            return list(cache.get(key.strip().upper(), []))
         if self.view is not None:
             try:
-                d = com_call(self.view, "GetDocumentByKey", key, True)
-                if d is not None:
-                    return d
+                dc = com_call(self.view, "GetAllDocumentsByKey", key, True)
+                docs = []
+                d = com_call(dc, "GetFirstDocument")
+                while d is not None:
+                    docs.append(d)
+                    d = com_call(dc, "GetNextDocument", d)
+                if docs:
+                    return docs
             except Exception:
                 pass
-        formula = '%s = "%s"' % (self.docno_field, key.replace('"', '""'))
+        formula = '@Text(%s) = "%s"' % (self.docno_field, key.replace('"', '""'))
         try:
             # 第二參數必須是 NotesDateTime（pywin32 傳 None 會「類型不符」）：給一個很早的日期＝不限時間
             if not hasattr(self, "_since"):
                 self._since = com_call(self.ns, "CreateDateTime", "01/01/1980")
-            dc = com_call(self.db, "Search", formula, self._since, 1)
-            if dc.Count > 0:
-                return com_call(dc, "GetFirstDocument")
+            dc = com_call(self.db, "Search", formula, self._since, 0)
+            docs = []
+            d = com_call(dc, "GetFirstDocument")
+            while d is not None:
+                docs.append(d)
+                d = com_call(dc, "GetNextDocument", d)
+            return docs
         except Exception as e:
             logging.warning("公式搜尋失敗 %s: %s", key, e)
-        return None
+        return []
 
-    def lookup_row(self, key):
-        """回傳 (vals, cat, link, found)"""
-        if not key:
-            return [""] * len(self.fields), "(查無)", "", False
-        d = self.find(key)
-        if d is None:
-            return [""] * len(self.fields), "(查無)", "", False
+    def find(self, key):
+        docs = self.find_all(key)
+        return docs[0] if docs else None
+
+    def row_from_doc(self, d):
         vals = [item_text(d, f) for f in self.fields]
         cat = class_of(item_text(d, self.class_field)) if self.class_field else ""
-        return vals, cat, doc_link(d, self.server, self.replica_id), True
+        return vals, cat, doc_link(d, self.server, self.replica_id)
+
+    def lookup_rows(self, key, multi="all"):
+        """回傳 [(vals, cat, link), ...]；查無回 []"""
+        if not key:
+            return []
+        docs = self.find_all(key)
+        if not docs:
+            return []
+        if multi != "all":
+            docs = docs[:1]
+        return [self.row_from_doc(d) for d in docs]
+
+    def lookup_row(self, key):
+        """回傳 (vals, cat, link, found)（單筆相容介面）"""
+        rows = self.lookup_rows(key, "first")
+        if not rows:
+            return [""] * len(self.fields), "(查無)", "", False
+        vals, cat, link = rows[0]
+        return vals, cat, link, True
 
 
-def run_lookup(cfg, header, data, key_idx, progress=None):
-    """對每列查 Notes。回傳 dict(out_rows, found, missing, extra_cols, cat_idx, link_idx, amt_idx)。
+def run_lookup(cfg, header, data, key_idx, progress=None, epms_on=None, gr_on=None, key_field=None):
+    """對每列查 Notes。回傳 dict(out_rows, found, missing, extra_cols, cat_idx, link_idx, amt_idx, ...)。
+    epms_on / gr_on：是否比對 ePMS / 驗收系統(GR)；key_field：ePMS 用哪個欄位對 Excel key（DOCNO/A21/A22）。
     progress(n, total, found) 可選。"""
-    lk = NotesLookup(cfg["server"], cfg["dbfile"], cfg["docno_view"], cfg["docno_field"],
-                     cfg["fetch_fields"], cfg["class_field"])
-    gr = None
-    if cfg["gr_enabled"].lower() in ("1", "true", "yes"):
+    truthy = lambda v: str(v).lower() in ("1", "true", "yes")
+    if epms_on is None:
+        epms_on = truthy(cfg["epms_enabled"])
+    if gr_on is None:
+        gr_on = truthy(cfg["gr_enabled"])
+    if not epms_on and not gr_on:
+        raise LookupError_(2, "ePMS 與驗收系統至少要勾選一個")
+    key_field = (key_field or cfg["epms_key_field"] or "DOCNO").strip()
+    multi = (cfg.get("multi_match") or "all").strip().lower()
+
+    ns = None
+    lk = gr = None
+    if epms_on:
+        # 搜尋欄位不是 DOCNO 時，(ByDocNo) 檢視沒用，直接走批次公式；且把 DOCNO 一起帶出來好對照
+        view = cfg["docno_view"] if key_field.upper() == cfg["docno_field"].upper() else ""
+        fields_csv = ensure_fields(cfg["fetch_fields"], ["A21", "A22", "VendorNameList"])
+        if key_field.upper() != cfg["docno_field"].upper():
+            # 用 A21/A22 搜尋時把 DOCNO 放在最前面，方便對照是哪張單
+            fields_csv = ensure_fields(cfg["docno_field"] + "," + fields_csv, [])
+        lk = NotesLookup(cfg["server"], cfg["dbfile"], view, key_field, fields_csv, cfg["class_field"])
+        ns = lk.ns
+    if gr_on:
         gr = NotesLookup(cfg["gr_server"], cfg["gr_dbfile"], cfg["gr_view"], cfg["gr_key_field"],
-                         cfg["gr_fetch_fields"], "", ns=lk.ns)
-    extra_cols = lk.fields + ["機台類別", "ePMS Link"]
+                         cfg["gr_fetch_fields"], "", ns=ns)
+        ns = gr.ns
+
+    extra_cols = []
+    cat_idx = link_idx = None
+    if lk is not None:
+        extra_cols += lk.fields + ["機台類別", "ePMS Link"]
+        cat_idx = len(header) + len(lk.fields)
+        link_idx = cat_idx + 1
     if gr is not None:
         extra_cols += ["GR " + f for f in gr.fields] + ["GR Link"]
-    cat_idx = len(header) + len(lk.fields)
-    link_idx = cat_idx + 1
     gr_found = 0
+    logging.info("比對範圍：ePMS=%s（依 %s）  驗收系統=%s", "是" if epms_on else "否", key_field if epms_on else "-", "是" if gr_on else "否")
     amt_idx = None
     amt_name = cfg["amt_column"].strip().lower()
     if amt_name:
@@ -447,40 +540,51 @@ def run_lookup(cfg, header, data, key_idx, progress=None):
                 break
     all_keys = [str(r[key_idx]).strip() for r in data if r[key_idx] is not None and str(r[key_idx]).strip()]
     sample_keys = all_keys[:5]
-    for lookup in ([lk] + ([gr] if gr is not None else [])):
+    for lookup in [x for x in (lk, gr) if x is not None]:
         lookup.pick_view(sample_keys)
         if lookup.view is None:
             if progress:
                 progress(0, len(data), 0)
             lookup.prefetch(all_keys)
-    out_rows, found, missing = [], 0, []
+    out_rows, found, missing, multi_keys = [], 0, [], 0
     for n, row in enumerate(data, 1):
         key = "" if row[key_idx] is None else str(row[key_idx]).strip()
-        vals, cat, link, ok = lk.lookup_row(key)
-        if ok:
-            found += 1
-        elif key:
-            missing.append(key)
-        extra = vals + [cat, link]
+        gr_part = []
         if gr is not None:
             gvals, _, glink, gok = gr.lookup_row(key)
             if gok:
                 gr_found += 1
-            extra += gvals + [glink]
-        out_rows.append(list(row) + extra)
+            gr_part = gvals + [glink]
+        if lk is not None:
+            hits = lk.lookup_rows(key, multi)
+            if hits:
+                found += 1
+                if len(hits) > 1:
+                    multi_keys += 1
+                for vals, cat, link in hits:
+                    out_rows.append(list(row) + vals + [cat, link] + gr_part)
+            else:
+                if key:
+                    missing.append(key)
+                out_rows.append(list(row) + [""] * len(lk.fields) + ["(查無)", ""] + gr_part)
+        else:
+            out_rows.append(list(row) + gr_part)
         if progress and (n % 10 == 0 or n == len(data)):
-            progress(n, len(data), found)
+            progress(n, len(data), found if lk is not None else gr_found)
+    if lk is not None and multi_keys:
+        logging.info("ePMS：%d 個 key 對到多筆（multi_match=%s，輸出 %d 列）", multi_keys, multi, len(out_rows))
     if gr is not None:
         logging.info("GR（%s）命中 %d / %d", cfg["gr_dbfile"], gr_found, len(data))
     link_cols = [i for i, c in enumerate(header + extra_cols) if c.endswith("Link")]
     return {"out_rows": out_rows, "found": found, "missing": missing, "extra_cols": extra_cols,
             "cat_idx": cat_idx, "link_idx": link_idx, "amt_idx": amt_idx, "link_cols": link_cols,
-            "gr_found": gr_found}
+            "gr_found": gr_found, "epms_on": lk is not None, "gr_on": gr is not None, "key_field": key_field}
 
 
 # ---------- CLI ----------
 
-def run_cli(cfg, base, in_path, preview):
+def run_cli(cfg, base, in_path, preview, opts=None):
+    opts = opts or {}
     if not in_path or not os.path.isfile(in_path):
         logging.error("找不到輸入 Excel：%s（命令列給路徑，或在 ini 設 input_xlsx）", in_path or "(未指定)")
         return 6
@@ -496,7 +600,7 @@ def run_cli(cfg, base, in_path, preview):
             sys.stdout.write("\r  處理中… %d/%d，命中 %d" % (n, total, found))
             sys.stdout.flush()
     try:
-        res = run_lookup(cfg, header, data, key_idx, prog)
+        res = run_lookup(cfg, header, data, key_idx, prog, opts.get("epms"), opts.get("gr"), opts.get("key"))
     except LookupError_ as e:
         logging.error("%s", e)
         return e.code
@@ -566,6 +670,26 @@ def run_gui(cfg, base, in_path):
     btn_export.pack(side="left")
     btn_open = ttk.Button(top, text="開啟輸出檔", state="disabled")
     btn_open.pack(side="left", padx=4)
+
+    # ---- 第二列：搜尋依據 / 比對哪些系統 ----
+    opt = ttk.Frame(root, padding=(8, 0, 8, 4))
+    opt.pack(fill="x")
+    ttk.Label(opt, text="Excel key 欄對應：").pack(side="left")
+    key_opts = [k.strip() for k in cfg["epms_key_options"].split(",") if k.strip()]
+    key_labels = {"DOCNO": "DOCNO（單號）", "A21": "A21（material）", "A22": "A22（原廠料號）"}
+    key_cb = ttk.Combobox(opt, state="readonly", width=18, values=[key_labels.get(k, k) for k in key_opts])
+    init_key = (cfg["epms_key_field"] or "DOCNO").strip()
+    key_cb.current(key_opts.index(init_key) if init_key in key_opts else 0)
+    key_cb.pack(side="left", padx=(0, 16))
+    truthy = lambda v: str(v).lower() in ("1", "true", "yes")
+    epms_var = tk.BooleanVar(value=truthy(cfg["epms_enabled"]))
+    gr_var = tk.BooleanVar(value=truthy(cfg["gr_enabled"]))
+    ttk.Checkbutton(opt, text="比對 ePMS（eri\\pms.nsf）", variable=epms_var).pack(side="left")
+    ttk.Checkbutton(opt, text="比對驗收系統（eop\\gr.nsf，依 DCNUM）", variable=gr_var).pack(side="left", padx=(12, 0))
+    ttk.Label(opt, text="   A21 / A22 / VendorNameList 一定會帶出；A21/A22 搜尋對到多筆時每筆各一列", foreground="#667").pack(side="left")
+
+    def selected_key():
+        return key_opts[key_cb.current()]
 
     bar = ttk.Progressbar(root, mode="determinate")
     bar.pack(fill="x", padx=8)
@@ -637,7 +761,9 @@ def run_gui(cfg, base, in_path):
     def refresh_stats():
         stat_tv.delete(*stat_tv.get_children())
         res = state["res"]
-        if not res:
+        if not res or res["cat_idx"] is None:
+            cat_cb["values"] = ["（全部）"]
+            cat_cb.set("（全部）")
             return
         stats = {}
         for r, inc in zip(res["out_rows"], state["include"]):
@@ -681,7 +807,7 @@ def run_gui(cfg, base, in_path):
             f = cat_cb.get()
             n = 0
             for idx, (r, inc) in enumerate(zip(res["out_rows"], state["include"])):
-                cat = r[res["cat_idx"]]
+                cat = r[res["cat_idx"]] if res["cat_idx"] is not None else ""
                 if f != "（全部）" and cat != f:
                     continue
                 tags = []
@@ -712,7 +838,8 @@ def run_gui(cfg, base, in_path):
         idx = int(iid)
         state["include"][idx] = not state["include"][idx]
         r = state["res"]["out_rows"][idx]
-        tags = ["miss"] if r[state["res"]["cat_idx"]] == "(查無)" else []
+        ci_ = state["res"]["cat_idx"]
+        tags = ["miss"] if (ci_ is not None and r[ci_] == "(查無)") else []
         if not state["include"][idx]:
             tags.append("off")
         tv.item(iid, values=row_values(r, state["include"][idx]), tags=tags)
@@ -766,6 +893,9 @@ def run_gui(cfg, base, in_path):
         except Exception as e:
             messagebox.showerror("讀取 Excel 失敗", str(e))
             return
+        if not epms_var.get() and not gr_var.get():
+            messagebox.showwarning("未選系統", "「比對 ePMS」與「比對驗收系統」至少要勾一個")
+            return
         state["header"] = header
         btn_run.configure(state="disabled")
         btn_export.configure(state="disabled")
@@ -773,10 +903,11 @@ def run_gui(cfg, base, in_path):
         bar["value"] = 0
         status.configure(text="查詢中… 0/%d" % len(data))
         logging.info("輸入：%s，%d 列，key 欄「%s」", p, len(data), header[key_idx])
+        e_on, g_on, kf = epms_var.get(), gr_var.get(), selected_key()
 
         def worker():
             try:
-                res = run_lookup(cfg, header, data, key_idx, lambda n, t, f: q.put(("prog", n, t, f)))
+                res = run_lookup(cfg, header, data, key_idx, lambda n, t, f: q.put(("prog", n, t, f)), e_on, g_on, kf)
                 q.put(("done", res))
             except LookupError_ as e:
                 q.put(("err", str(e)))
@@ -872,11 +1003,11 @@ def run_gui(cfg, base, in_path):
 def main():
     cfg = load_config()
     base = app_dir()
-    cli_in, preview, cli = cli_input_and_preview()
+    cli_in, preview, cli, opts = cli_input_and_preview()
     in_path = abs_path(base, cli_in or cfg["input_xlsx"])
     setup_logging(abs_path(base, cfg["log_file"]))
     if cli:
-        return run_cli(cfg, base, in_path, preview)
+        return run_cli(cfg, base, in_path, preview, opts)
     return run_gui(cfg, base, in_path)
 
 

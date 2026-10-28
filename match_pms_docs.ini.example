@@ -4,10 +4,18 @@ server       = UMCD20/UMC
 dbfile       = eri\pms.nsf
 docno_view   = (ByDocNo)
 docno_field  = DOCNO
-fetch_fields = A17,A21,A25,A26
+; Excel key 欄要對 ePMS 哪個欄位：DOCNO（單號）/ A21（material）/ A22（原廠料號）。視窗裡也可臨時切換
+epms_key_field   = DOCNO
+epms_key_options = DOCNO,A21,A22
+; 要帶出的欄位（A21 / A22 / VendorNameList 不在這裡也會自動補上；用 A21/A22 搜尋時會再補 DOCNO）
+fetch_fields = A17,A21,A22,A25,A26,VendorNameList
 class_field  = A17
+; 是否比對 ePMS（視窗裡可臨時勾選）
+epms_enabled = true
+; 用 A21/A22 搜尋時同一 key 可能對到多筆：all＝每筆各一列；first＝只取第一筆
+multi_match  = all
 
-; 第二個資料庫（GR）：同一個 key 對 DCNUM，把文件連結放在 ePMS Link 右邊的 GR Link
+; 第二個資料庫（驗收系統 GR）：同一個 key 對 DCNUM，把文件連結放在 ePMS Link 右邊的 GR Link（視窗裡可臨時勾選）
 gr_enabled   = true
 gr_server    = UMCD14/UMC
 gr_dbfile    = eop\gr.nsf

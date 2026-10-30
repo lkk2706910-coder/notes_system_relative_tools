@@ -120,13 +120,17 @@ def cli_input_and_preview():
     args = sys.argv[1:]
     preview = 0
     cli = "--cli" in args
-    opts = {"key": None, "epms": None, "gr": None}
+    opts = {"key": None, "epms": None, "gr": None, "dump": None}
     files = []
     i = 0
     while i < len(args):
         a = args[i]
         if a == "--key" and i + 1 < len(args):
             opts["key"] = args[i + 1]
+            i += 2
+            continue
+        if a == "--dump" and i + 1 < len(args):
+            opts["dump"] = args[i + 1]
             i += 2
             continue
         if a == "--no-epms":
@@ -163,13 +167,76 @@ def com_call(obj, name, *args):
 
 
 def item_text(doc, name):
+    """讀欄位文字。Notes 文件可有多個同名 item（GetFirstItem 可能拿到空的那個），
+    所以：先 GetFirstItem；空的話掃全部同名 item 取第一個非空；還是空再退回 GetItemValue。"""
     try:
         if not com_call(doc, "HasItem", name):
             return ""
-        it = com_call(doc, "GetFirstItem", name)
-        return (it.Text or "") if it is not None else ""
     except Exception:
         return ""
+    try:
+        it = com_call(doc, "GetFirstItem", name)
+        if it is not None:
+            t = (it.Text or "").strip()
+            if t:
+                return t
+    except Exception:
+        pass
+    try:
+        for it in doc.Items:
+            try:
+                if (it.Name or "").lower() == name.lower():
+                    t = (it.Text or "").strip()
+                    if t:
+                        return t
+            except Exception:
+                continue
+    except Exception:
+        pass
+    try:
+        v = com_call(doc, "GetItemValue", name)
+        if isinstance(v, (list, tuple)):
+            return "; ".join(str(x) for x in v if x not in (None, ""))
+        return "" if v is None else str(v)
+    except Exception:
+        return ""
+
+
+def dump_items(doc, maxlen=200):
+    """列出文件所有 item：name | type | text（同名會重複出現，方便看出空 item 擋在前面）"""
+    rows = []
+    try:
+        for it in doc.Items:
+            try:
+                t = (it.Text or "")
+            except Exception:
+                t = "<無法讀取>"
+            if len(t) > maxlen:
+                t = t[:maxlen] + "…"
+            try:
+                ty = it.Type
+            except Exception:
+                ty = "?"
+            rows.append((it.Name, ty, t))
+    except Exception as e:
+        rows.append(("<Items 讀取失敗>", "", str(e)))
+    return rows
+
+
+def inspect_key(cfg, key, key_field=None, use_gr=False):
+    """找一筆文件並回傳 (描述, [(name,type,text),...])；給「檢查欄位」用"""
+    if use_gr:
+        lk = NotesLookup(cfg["gr_server"], cfg["gr_dbfile"], cfg["gr_view"], cfg["gr_key_field"], "", "")
+    else:
+        kf = (key_field or cfg["epms_key_field"] or "DOCNO").strip()
+        view = cfg["docno_view"] if kf.upper() == cfg["docno_field"].upper() else ""
+        lk = NotesLookup(cfg["server"], cfg["dbfile"], view, kf, "", "")
+    docs = lk.find_all(key)
+    if not docs:
+        return "%s 在 %s 查無（依 %s）" % (key, lk.dbfile, lk.docno_field), []
+    d = docs[0]
+    head = "%s 在 %s 找到 %d 筆（依 %s），顯示第 1 筆：%s" % (key, lk.dbfile, len(docs), lk.docno_field, doc_link(d, lk.server, lk.replica_id))
+    return head, dump_items(d)
 
 
 def doc_link(doc, server, replica_id):
@@ -670,6 +737,8 @@ def run_gui(cfg, base, in_path):
     btn_export.pack(side="left")
     btn_open = ttk.Button(top, text="開啟輸出檔", state="disabled")
     btn_open.pack(side="left", padx=4)
+    btn_inspect = ttk.Button(top, text="檢查欄位…")
+    btn_inspect.pack(side="left", padx=(12, 0))
 
     # ---- 第二列：搜尋依據 / 比對哪些系統 ----
     opt = ttk.Frame(root, padding=(8, 0, 8, 4))
@@ -949,6 +1018,8 @@ def run_gui(cfg, base, in_path):
                     fill_table()
                     btn_run.configure(state="normal")
                     btn_export.configure(state="normal")
+                elif kind == "inspect":
+                    show_inspect(msg[1], msg[2])
                 elif kind == "err":
                     status.configure(text="失敗：" + msg[1])
                     logging.error("%s", msg[1])
@@ -989,6 +1060,45 @@ def run_gui(cfg, base, in_path):
             except Exception as e:
                 messagebox.showwarning("開啟失敗", str(e))
 
+    def do_inspect():
+        from tkinter import simpledialog
+        key = simpledialog.askstring("檢查欄位", "輸入要檢查的 key（依目前「Excel key 欄對應」的欄位查 ePMS）：", parent=root)
+        if not key or not key.strip():
+            return
+        key = key.strip()
+        kf = selected_key()
+        use_gr = (not epms_var.get()) and gr_var.get()
+
+        def worker():
+            try:
+                head, rows = inspect_key(cfg, key, kf, use_gr)
+                q.put(("inspect", head, rows))
+            except Exception as e:
+                q.put(("err", "檢查欄位失敗：%s" % e))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def show_inspect(head, rows):
+        win = tk.Toplevel(root)
+        win.title("檢查欄位")
+        win.geometry("900x600")
+        ttk.Label(win, text=head, wraplength=880, padding=6).pack(fill="x")
+        fr = ttk.Frame(win)
+        fr.pack(fill="both", expand=True, padx=6, pady=(0, 6))
+        t = ttk.Treeview(fr, columns=("n", "ty", "v"), show="headings")
+        for c, w, h in (("n", 200, "item 名稱"), ("ty", 60, "type"), ("v", 580, "值（Text）")):
+            t.heading(c, text=h)
+            t.column(c, width=w, anchor="w")
+        sb = ttk.Scrollbar(fr, orient="vertical", command=t.yview)
+        t.configure(yscrollcommand=sb.set)
+        t.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        t.tag_configure("empty", foreground="#9ca3af")
+        for n, ty, v in rows:
+            t.insert("", "end", values=(n, ty, v), tags=("empty",) if not v else ())
+        ttk.Label(win, text="灰字＝該 item 是空的。同名 item 出現多個時，程式會取第一個非空的。表單上看得到但這裡完全沒有的欄位＝計算顯示欄，文件沒存。",
+                  foreground="#667", padding=6, wraplength=880).pack(fill="x")
+
+    btn_inspect.configure(command=do_inspect)
     btn_export.configure(command=do_export)
     btn_open.configure(command=lambda: os.startfile(state["out_path"]) if state["out_path"] else None)
 
@@ -1006,6 +1116,16 @@ def main():
     cli_in, preview, cli, opts = cli_input_and_preview()
     in_path = abs_path(base, cli_in or cfg["input_xlsx"])
     setup_logging(abs_path(base, cfg["log_file"]))
+    if opts.get("dump"):
+        try:
+            head, rows = inspect_key(cfg, opts["dump"], opts.get("key"), opts.get("epms") is False)
+        except LookupError_ as e:
+            logging.error("%s", e)
+            return e.code
+        logging.info(head)
+        for n, ty, t in rows:
+            logging.info("  %-24s type=%-5s %s", n, ty, t)
+        return 0
     if cli:
         return run_cli(cfg, base, in_path, preview, opts)
     return run_gui(cfg, base, in_path)

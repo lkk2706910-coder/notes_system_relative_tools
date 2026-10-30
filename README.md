@@ -30,6 +30,7 @@ AI agent 工作指南見 [`AGENTS.md`](AGENTS.md)；其他通用 Notes 工具在
    - `✓` 欄點一下 → 切換該列**要不要匯出**（排除的列變灰）
    - 雙擊 **機台類別** 儲存格 → 直接改分類（Enter 確定、Esc 取消），右側統計即時更新
    - 雙擊 **Link** → 用 Notes 開啟該文件核對
+   - **檢查欄位…** → 輸入一個 key，列出該文件所有 item 的名稱/型別/值（空的灰字），用來診斷「畫面有值、輸出沒有」
    - 「只看類別」下拉 → 只顯示某一類；查無的列紅字
    - 右側 **分類統計** 只計算勾選中的列
 5. **匯出 Excel…** → 選存檔位置（預設 `<輸入>_notes.xlsx`），只匯出勾選的列；完成可直接開啟。
@@ -43,6 +44,8 @@ MatchPmsDocs.exe 檔案.xlsx --cli --preview 5          # 順便印前 5 列
 MatchPmsDocs.exe 檔案.xlsx --cli --key A21            # 用 material 搜尋（DOCNO / A21 / A22）
 MatchPmsDocs.exe 檔案.xlsx --cli --no-gr              # 只比對 ePMS
 MatchPmsDocs.exe 檔案.xlsx --cli --no-epms            # 只比對驗收系統
+MatchPmsDocs.exe --dump U20251203756                  # 列出該單所有 item（名稱/型別/值），診斷欄位帶不出來
+MatchPmsDocs.exe --dump S00213358 --key A21           # 依 material 找到的那張單
 ```
 不開視窗，直接查詢並匯出到 `<輸入>_notes.xlsx`。exe 是 `--noconsole` 打包，此模式的訊息看 log 檔。
 
@@ -116,5 +119,8 @@ python -m PyInstaller --onefile --console --clean --name MatchPmsDocs --hidden-i
 
 - **全部 `(查無)`**：先確認 `(ByDocNo)` 檢視第一欄真的是 DOCNO、Excel 的 `name` 值與 Notes `DOCNO` 完全一致（大小寫/空白）。可暫時把 `docno_view` 留空強制走公式搜尋驗證。
 - **GR 查詢很慢**：log 若出現 `候選檢視都不適用，改用公式搜尋`，表示 `gr_view` 的候選都不是依 DCNUM 排序的檢視；用 `ListNotesViews.vbs` 找出正確的填到 `gr_view` 最前面。
+- **Notes 畫面上 A21/A26 有值，輸出卻空白**：按視窗「檢查欄位…」（或 `--dump <key>`）看該單所有 item。
+  - 同名 item 有多個、前面是空的 → 程式已改成取第一個非空的，重新打包即可。
+  - 清單裡**完全沒有**那個 item → 表單上看到的是「計算顯示」欄位，文件沒存，程式讀不到；要看它是由哪個 item 算出來的（問系統管理者或用 `main` branch 的 `ExportFormDesign.vbs` 看表單設計），改抓那個來源欄位。
 - **Link 點了沒反應**：該台電腦要有 Notes client 並登入；`notes://` 協定由 Notes 處理。
 - **ini 中文亂碼 / 讀不到**：程式會自動辨識 UTF-8 / Big5；仍有問題就把 ini 另存 UTF-8。

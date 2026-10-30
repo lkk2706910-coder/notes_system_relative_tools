@@ -1,6 +1,6 @@
 @echo off
 rem 執行 Cost Down Project 預估報表 (供雙擊或 Windows 工作排程器使用)
-rem 設定 (SERVER / DBFILE / VIEWNAME / 收件人 / DRY_RUN 等) 在 CostDownReport.vbs 頂端
+rem 設定 (SERVER / DBFILE / VIEWNAME / 收件人 / SEND_MAIL / SAVE_HTML 等) 在 CostDownReport.vbs 頂端
 
 cd /d "%~dp0"
 echo [%date% %time%] === 開始產出報表 ===>> cost_down_report_log.txt

@@ -46,8 +46,10 @@ Dim MAIL_TO : MAIL_TO = "bo_hsiang_kao@umc.com;" & _
 Const MAIL_SUBJECT = "Cost Down Project 預估報表（未實際結案）"
 
 ' --- 其他 ---
-Const DRY_RUN         = False    ' True＝不寄信，改把 HTML 存到 OUTFILE（測試用）
-Const OUTFILE         = "cost_down_report.html"
+' 兩個開關可同時開：預設寄信＋存 HTML。只想測試不寄信就把 SEND_MAIL 改 False。
+Const SEND_MAIL       = True     ' True＝透過 Notes 寄信給 MAIL_TO
+Const SAVE_HTML       = True     ' True＝把同一份 HTML 存到 OUTFILE（先存檔再寄信，寄信失敗也有檔案）
+Const OUTFILE         = "cost_down_report.html"   ' 相對路徑＝以本 .vbs 所在資料夾為基準
 Const PROGRESS_EVERY  = 200
 
 ' ==================================================================================
@@ -177,15 +179,23 @@ For mi = 0 To UBound(monthKeys)
 Next
 html = html & HtmlFooter()
 
-' ---------- 寄信 / DRY RUN ----------
-If DRY_RUN Then
+' ---------- 存 HTML / 寄信（可同時） ----------
+Dim summary : summary = "（月份區塊 " & (UBound(monthKeys) + 1) & " 個，共 " & kept & " 筆）"
+
+If SAVE_HTML Then
   Dim outPath : outPath = AbsPath(OUTFILE)
   EnsureFolder fso.GetParentFolderName(outPath)
   WriteTextUtf8 outPath, html
-  WScript.Echo "DRY_RUN=True，已把 HTML 存到：" & outPath & "（未寄信）"
-Else
+  WScript.Echo "OK 已把 HTML 存到：" & outPath & " " & summary
+End If
+
+If SEND_MAIL Then
   SendHtmlMail MAIL_TO, MAIL_SUBJECT, html
-  WScript.Echo "OK 已寄出報表到：" & MAIL_TO & "（月份區塊 " & (UBound(monthKeys) + 1) & " 個，共 " & kept & " 筆）"
+  WScript.Echo "OK 已寄出報表到：" & MAIL_TO & " " & summary
+End If
+
+If Not SAVE_HTML And Not SEND_MAIL Then
+  WScript.Echo "注意：SEND_MAIL 與 SAVE_HTML 都是 False，沒有任何輸出 " & summary
 End If
 
 WScript.Quit 0
@@ -436,7 +446,7 @@ Sub SendHtmlMail(mailTo, subject, htmlBody)
   Call memo.Send(False)
 End Sub
 
-' 寫 UTF-8 文字檔（DRY_RUN 模式用）
+' 寫 UTF-8 + BOM 文字檔（SAVE_HTML 用）
 Sub WriteTextUtf8(path, text)
   Dim st : Set st = CreateObject("ADODB.Stream")
   st.Type = 2 : st.Charset = "utf-8" : st.Open

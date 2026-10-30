@@ -79,7 +79,7 @@ MatchPmsDocs.exe --dump S00213358 --key A21           # 依 material 找到的�
 | `epms_key_options` | `DOCNO,A21,A22` | 視窗下拉可選的欄位 |
 | `epms_enabled` | `true` | 預設是否比對 ePMS（視窗可臨時勾選） |
 | `multi_match` | `all` | A21/A22 對到多筆時 `all`＝每筆一列、`first`＝只取第一筆 |
-| `field_fallbacks` | `A21:C11,A22:C12,A26:C15` | 備援欄位：另一種表單版本把資料存在 C 欄，主欄位空時改讀備援欄；用 A21/A22 搜尋時也一併搜備援欄（`主:備援`，多個備援用 `/`） |
+| `field_fallbacks` | `A21:C11,A22:C12,A26:C15` | 備援欄位：`DOCNO` U 開頭的單資料在 `A21/A22/A26`，V 開頭的單同樣資料存在 `C11/C12/C15`；主欄位空時改讀備援欄，用 A21/A22 搜尋時也一併搜備援欄（`主:備援`，多個備援用 `/`） |
 | `fetch_fields` | `A17,A21,A22,A25,A26,VendorNameList` | 要抓的欄位（A21/A22/VendorNameList 會自動補上） |
 | `class_field` | `A17` | 用哪個欄位做分類 |
 | `input_xlsx` | （命令列給） | 固定輸入檔路徑 |
@@ -125,7 +125,7 @@ python -m PyInstaller --onefile --console --clean --name MatchPmsDocs --hidden-i
 - **GR 查詢很慢**：log 若出現 `候選檢視都不適用，改用公式搜尋`，表示 `gr_view` 的候選都不是依 DCNUM 排序的檢視；用 `ListNotesViews.vbs` 找出正確的填到 `gr_view` 最前面。
 - **Notes 畫面上 A21/A26 有值，輸出卻空白**：按視窗「檢查欄位…」（或 `--dump <key>`）看該單所有 item。
   - 同名 item 有多個、前面是空的 → 程式已改成取第一個非空的，重新打包即可。
-  - 清單裡 `A21` 是空的、值在 `C11` 這類別的 item → 另一種表單版本，把對應加進 `field_fallbacks`（預設已有 `A21:C11,A22:C12,A26:C15`）。
+  - 清單裡 `A21` 是空的、值在 `C11` 這類別的 item → 另一種表單版本（`DOCNO` V 開頭的單用 `C11/C12/C15`，U 開頭用 `A21/A22/A26`），把對應加進 `field_fallbacks`（預設已有 `A21:C11,A22:C12,A26:C15`）。
   - 清單裡**完全沒有**那個 item → 表單上看到的是「計算顯示」欄位，文件沒存，程式讀不到；要看它是由哪個 item 算出來的（問系統管理者或用 `main` branch 的 `ExportFormDesign.vbs` 看表單設計），改抓那個來源欄位。
 - **Link 點了沒反應**：該台電腦要有 Notes client 並登入；`notes://` 協定由 Notes 處理。
 - **ini 中文亂碼 / 讀不到**：程式會自動辨識 UTF-8 / Big5；仍有問題就把 ini 另存 UTF-8。

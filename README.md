@@ -19,7 +19,9 @@ AI agent 工作指南見 [`AGENTS.md`](AGENTS.md)；其他通用 Notes 工具在
 
 雙擊 `MatchPmsDocs.exe`（或把 xlsx 拖到 exe 上、或 `MatchPmsDocs.exe 檔案.xlsx`）會開一個視窗：
 
-1. **輸入 Excel** → 瀏覽選檔（拖檔進來的會自動帶入並開始查）。
+1. **輸入來源**二選一：
+   - **Excel 檔** → 上方瀏覽選檔（拖檔進來的會自動帶入並開始查）。
+   - **直接貼上清單** → 文字框貼 key（一行一個，或逗號 / 分號 / 空白分隔；從 Excel 複製整欄直接貼也行，會自動去空白、去重、忽略標題 `name`），下方即時顯示「已貼上 N 個 key」，**多筆一次查**。匯出時原欄位只有 `name` 一欄。
 2. **第二列選項**：
    - **Excel key 欄對應**：`DOCNO（單號）` / `A21（material）` / `A22（原廠料號）`——Excel 的 `name` 欄就拿去對 ePMS 的這個欄位。
    - **比對 ePMS** / **比對驗收系統**：兩個勾選框，可只勾一個或都勾（至少一個）。
@@ -44,6 +46,7 @@ MatchPmsDocs.exe 檔案.xlsx --cli --preview 5          # 順便印前 5 列
 MatchPmsDocs.exe 檔案.xlsx --cli --key A21            # 用 material 搜尋（DOCNO / A21 / A22）
 MatchPmsDocs.exe 檔案.xlsx --cli --no-gr              # 只比對 ePMS
 MatchPmsDocs.exe 檔案.xlsx --cli --no-epms            # 只比對驗收系統
+MatchPmsDocs.exe --cli --keys "U20251203756,V20260202498"   # 不用 Excel，直接給清單（也可給一個文字檔路徑，一行一個）
 MatchPmsDocs.exe --dump U20251203756                  # 列出該單所有 item（名稱/型別/值），診斷欄位帶不出來
 MatchPmsDocs.exe --dump S00213358 --key A21           # 依 material 找到的那張單
 ```

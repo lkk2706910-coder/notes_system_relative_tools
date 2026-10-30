@@ -123,13 +123,17 @@ def cli_input_and_preview():
     args = sys.argv[1:]
     preview = 0
     cli = "--cli" in args
-    opts = {"key": None, "epms": None, "gr": None, "dump": None}
+    opts = {"key": None, "epms": None, "gr": None, "dump": None, "keys": None}
     files = []
     i = 0
     while i < len(args):
         a = args[i]
         if a == "--key" and i + 1 < len(args):
             opts["key"] = args[i + 1]
+            i += 2
+            continue
+        if a == "--keys" and i + 1 < len(args):
+            opts["keys"] = args[i + 1]
             i += 2
             continue
         if a == "--dump" and i + 1 < len(args):
@@ -309,6 +313,19 @@ def class_of(value):
 
 
 # ---------- Excel ----------
+
+def parse_pasted_keys(text):
+    """貼上的清單 → key 列表：以換行/逗號/分號/Tab/空白分隔，去空白去重保序；順便過濾掉看起來是標題的 'name'"""
+    keys, seen = [], set()
+    for tok in re.split(r"[\r\n,;\t ]+", text or ""):
+        k = tok.strip().strip('"').strip("'")
+        if not k or k.lower() == "name":
+            continue
+        if k.upper() not in seen:
+            seen.add(k.upper())
+            keys.append(k)
+    return keys
+
 
 def read_input(path, sheet, header_row, key_col):
     from openpyxl import load_workbook
@@ -690,15 +707,27 @@ def run_lookup(cfg, header, data, key_idx, progress=None, epms_on=None, gr_on=No
 
 def run_cli(cfg, base, in_path, preview, opts=None):
     opts = opts or {}
-    if not in_path or not os.path.isfile(in_path):
-        logging.error("找不到輸入 Excel：%s（命令列給路徑，或在 ini 設 input_xlsx）", in_path or "(未指定)")
-        return 6
-    try:
-        header, data, key_idx = read_input(in_path, cfg["sheet"], int(cfg["header_row"] or 1), cfg["key_column"])
-    except Exception as e:
-        logging.error("讀取 Excel 失敗：%s", e)
-        return 7
-    logging.info("輸入：%s，%d 列，key 欄「%s」", in_path, len(data), header[key_idx])
+    if opts.get("keys"):
+        spec = opts["keys"]
+        if os.path.isfile(spec):
+            spec = open(spec, "rb").read().decode("utf-8-sig", "replace")
+        keys = parse_pasted_keys(spec)
+        if not keys:
+            logging.error("--keys 沒有解析到任何 key")
+            return 6
+        header, data, key_idx = [cfg["key_column"] or "name"], [[k] for k in keys], 0
+        in_path = os.path.join(base, "keys_notes.xlsx")
+        logging.info("輸入：--keys %d 個 key", len(data))
+    else:
+        if not in_path or not os.path.isfile(in_path):
+            logging.error("找不到輸入 Excel：%s（命令列給路徑、--keys 清單，或在 ini 設 input_xlsx）", in_path or "(未指定)")
+            return 6
+        try:
+            header, data, key_idx = read_input(in_path, cfg["sheet"], int(cfg["header_row"] or 1), cfg["key_column"])
+        except Exception as e:
+            logging.error("讀取 Excel 失敗：%s", e)
+            return 7
+        logging.info("輸入：%s，%d 列，key 欄「%s」", in_path, len(data), header[key_idx])
 
     def prog(n, total, found):
         if sys.stdout is not None:
@@ -719,7 +748,7 @@ def run_cli(cfg, base, in_path, preview, opts=None):
         for r in out_rows[:preview]:
             logging.info("  %s", " | ".join("" if v is None else str(v) for v in r))
 
-    out_path = abs_path(base, cfg["output_xlsx"]) or os.path.splitext(in_path)[0] + "_notes.xlsx"
+    out_path = abs_path(base, cfg["output_xlsx"]) or (in_path if opts.get("keys") else os.path.splitext(in_path)[0] + "_notes.xlsx")
     try:
         write_output(out_path, header, out_rows, res["extra_cols"], res["cat_idx"], res["link_idx"], res["amt_idx"],
                      cfg["sheet_per_category"].lower() in ("1", "true", "yes"), res["link_cols"])
@@ -797,6 +826,39 @@ def run_gui(cfg, base, in_path):
 
     def selected_key():
         return key_opts[key_cb.current()]
+
+    # ---- 輸入來源：Excel 檔 / 直接貼上 ----
+    src_var = tk.StringVar(value="paste" if not (in_path and os.path.isfile(in_path)) else "excel")
+    src = ttk.Frame(root, padding=(8, 0, 8, 4))
+    src.pack(fill="x")
+    ttk.Label(src, text="輸入來源：").pack(side="left")
+    ttk.Radiobutton(src, text="Excel 檔（上方選檔）", variable=src_var, value="excel").pack(side="left")
+    ttk.Radiobutton(src, text="直接貼上清單", variable=src_var, value="paste").pack(side="left", padx=(10, 0))
+    ttk.Label(src, text="   貼上：一行一個或用逗號/空白分隔，可直接從 Excel 複製整欄貼進來；多筆一起查",
+              foreground="#667").pack(side="left")
+    paste_fr = ttk.Frame(root, padding=(8, 0, 8, 4))
+    paste_box = tk.Text(paste_fr, height=4, font=("Consolas", 10), undo=True)
+    paste_sb = ttk.Scrollbar(paste_fr, orient="vertical", command=paste_box.yview)
+    paste_box.configure(yscrollcommand=paste_sb.set)
+    paste_box.pack(side="left", fill="both", expand=True)
+    paste_sb.pack(side="right", fill="y")
+    paste_cnt = ttk.Label(root, text="", foreground="#667", padding=(8, 0))
+
+    def refresh_src(*_):
+        if src_var.get() == "paste":
+            paste_fr.pack(fill="x", after=src)
+            paste_cnt.pack(fill="x", after=paste_fr)
+        else:
+            paste_fr.pack_forget()
+            paste_cnt.pack_forget()
+    src_var.trace_add("write", refresh_src)
+
+    def update_cnt(_=None):
+        n = len(parse_pasted_keys(paste_box.get("1.0", "end")))
+        paste_cnt.configure(text="已貼上 %d 個 key" % n if n else "")
+    paste_box.bind("<KeyRelease>", update_cnt)
+    paste_box.bind("<<Paste>>", lambda e: root.after(50, update_cnt))
+    refresh_src()
 
     bar = ttk.Progressbar(root, mode="determinate")
     bar.pack(fill="x", padx=8)
@@ -991,15 +1053,23 @@ def run_gui(cfg, base, in_path):
 
     # ---- 查詢（背景執行緒） ----
     def do_run():
-        p = path_var.get().strip()
-        if not p or not os.path.isfile(p):
-            messagebox.showerror("找不到檔案", "請先選擇存在的 Excel 檔")
-            return
-        try:
-            header, data, key_idx = read_input(p, cfg["sheet"], int(cfg["header_row"] or 1), cfg["key_column"])
-        except Exception as e:
-            messagebox.showerror("讀取 Excel 失敗", str(e))
-            return
+        if src_var.get() == "paste":
+            keys = parse_pasted_keys(paste_box.get("1.0", "end"))
+            if not keys:
+                messagebox.showerror("沒有資料", "請先在文字框貼上要查詢的 key（一行一個）")
+                return
+            p = "(貼上清單)"
+            header, data, key_idx = [cfg["key_column"] or "name"], [[k] for k in keys], 0
+        else:
+            p = path_var.get().strip()
+            if not p or not os.path.isfile(p):
+                messagebox.showerror("找不到檔案", "請先選擇存在的 Excel 檔，或切到「直接貼上清單」")
+                return
+            try:
+                header, data, key_idx = read_input(p, cfg["sheet"], int(cfg["header_row"] or 1), cfg["key_column"])
+            except Exception as e:
+                messagebox.showerror("讀取 Excel 失敗", str(e))
+                return
         if not epms_var.get() and not gr_var.get():
             messagebox.showwarning("未選系統", "「比對 ePMS」與「比對驗收系統」至少要勾一個")
             return
@@ -1076,7 +1146,10 @@ def run_gui(cfg, base, in_path):
         if not rows:
             messagebox.showwarning("沒有資料", "沒有勾選任何列")
             return
-        default = abs_path(base, cfg["output_xlsx"]) or os.path.splitext(path_var.get().strip())[0] + "_notes.xlsx"
+        if src_var.get() == "paste" or not path_var.get().strip():
+            default = abs_path(base, cfg["output_xlsx"]) or os.path.join(base, "paste_%s_notes.xlsx" % __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M"))
+        else:
+            default = abs_path(base, cfg["output_xlsx"]) or os.path.splitext(path_var.get().strip())[0] + "_notes.xlsx"
         p = filedialog.asksaveasfilename(title="匯出 Excel", defaultextension=".xlsx",
                                          initialfile=os.path.basename(default), initialdir=os.path.dirname(default),
                                          filetypes=[("Excel", "*.xlsx")])

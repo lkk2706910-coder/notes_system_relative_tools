@@ -40,6 +40,9 @@ DEFAULTS = {
     "fetch_fields":  "A17,A21,A22,A25,A26,VendorNameList",
     "class_field":   "A17",           # 用哪個欄位分類
     "epms_enabled":  "true",
+    # 備援欄位：有些表單版本把資料存在 C 欄；主欄位空時改讀備援欄，用 A21/A22 搜尋時也一併搜備援欄。
+    # 格式 主欄:備援欄,...  （對應關係請用「檢查欄位」核對後調整）
+    "field_fallbacks": "A21:C11,A22:C12,A26:C15",
     # 用 A21/A22 搜尋時一個 key 可能對到多筆：all＝每筆各一列（Excel 原欄位重複）；first＝只取第一筆
     "multi_match":   "all",
     # --- 第二個資料庫（GR）：用同一個 key 對 DCNUM，只取文件連結 ---
@@ -200,6 +203,35 @@ def item_text(doc, name):
         return "" if v is None else str(v)
     except Exception:
         return ""
+
+
+def parse_fallbacks(spec):
+    """'A21:C11,A26:C15' -> {'A21': ['C11'], 'A26': ['C15']}（備援可多個，用 / 分隔：A21:C11/D11）"""
+    m = {}
+    for part in (spec or "").split(","):
+        if ":" not in part:
+            continue
+        a, b = part.split(":", 1)
+        a = a.strip()
+        fbs = [x.strip() for x in b.split("/") if x.strip()]
+        if a and fbs:
+            m.setdefault(a.upper(), []).extend(fbs)
+    return m
+
+
+FALLBACKS = {}
+
+
+def item_text_fb(doc, name):
+    """主欄位有值就用；空的話依 FALLBACKS 讀備援欄"""
+    t = item_text(doc, name)
+    if t:
+        return t
+    for fb in FALLBACKS.get(name.upper(), []):
+        t = item_text(doc, fb)
+        if t:
+            return t
+    return ""
 
 
 def dump_items(doc, maxlen=200):
@@ -458,7 +490,7 @@ class NotesLookup:
                     d = com_call(v, "GetDocumentByKey", k, True)
                 except Exception:
                     d = None
-                if d is not None and item_text(d, self.docno_field).strip().upper() == k.upper():
+                if d is not None and item_text_fb(d, self.docno_field).strip().upper() == k.upper():
                     hit += 1
             if hit > 0:
                 self.view = v
@@ -466,6 +498,9 @@ class NotesLookup:
                 return
             logging.info("[%s] 檢視 %s 查不到樣本，跳過", self.dbfile, name)
         logging.warning("[%s] 候選檢視都不適用，改用公式搜尋 %s（較慢）", self.dbfile, self.docno_field)
+
+    def key_fields(self):
+        return [self.docno_field] + FALLBACKS.get(self.docno_field.upper(), [])
 
     def prefetch(self, keys, chunk=150):
         """沒有可用檢視時：用 @IsMember 一次把一批 key 的文件撈回來快取，整個庫只掃 ceil(n/chunk) 次。
@@ -480,12 +515,12 @@ class NotesLookup:
         for i in range(0, len(keys), chunk):
             part = keys[i:i + chunk]
             lst = ":".join('"%s"' % k.replace('"', '""') for k in part)
-            formula = '@IsMember(@Text(%s); %s)' % (self.docno_field, lst)
+            formula = " | ".join('@IsMember(@Text(%s); %s)' % (f, lst) for f in self.key_fields())
             try:
                 dc = com_call(self.db, "Search", formula, self._since, 0)
                 d = com_call(dc, "GetFirstDocument")
                 while d is not None:
-                    k = item_text(d, self.docno_field).strip()
+                    k = item_text_fb(d, self.docno_field).strip()
                     if k:
                         self.cache.setdefault(k.upper(), []).append(d)
                         got += 1
@@ -513,7 +548,8 @@ class NotesLookup:
                     return docs
             except Exception:
                 pass
-        formula = '@Text(%s) = "%s"' % (self.docno_field, key.replace('"', '""'))
+        kq = key.replace('"', '""')
+        formula = " | ".join('@Text(%s) = "%s"' % (f, kq) for f in self.key_fields())
         try:
             # 第二參數必須是 NotesDateTime（pywin32 傳 None 會「類型不符」）：給一個很早的日期＝不限時間
             if not hasattr(self, "_since"):
@@ -534,8 +570,8 @@ class NotesLookup:
         return docs[0] if docs else None
 
     def row_from_doc(self, d):
-        vals = [item_text(d, f) for f in self.fields]
-        cat = class_of(item_text(d, self.class_field)) if self.class_field else ""
+        vals = [item_text_fb(d, f) for f in self.fields]
+        cat = class_of(item_text_fb(d, self.class_field)) if self.class_field else ""
         return vals, cat, doc_link(d, self.server, self.replica_id)
 
     def lookup_rows(self, key, multi="all"):
@@ -598,6 +634,8 @@ def run_lookup(cfg, header, data, key_idx, progress=None, epms_on=None, gr_on=No
         extra_cols += ["GR " + f for f in gr.fields] + ["GR Link"]
     gr_found = 0
     logging.info("比對範圍：ePMS=%s（依 %s）  驗收系統=%s", "是" if epms_on else "否", key_field if epms_on else "-", "是" if gr_on else "否")
+    if FALLBACKS:
+        logging.info("備援欄位：%s", ", ".join("%s←%s" % (k, "/".join(v)) for k, v in FALLBACKS.items()))
     amt_idx = None
     amt_name = cfg["amt_column"].strip().lower()
     if amt_name:
@@ -1111,7 +1149,9 @@ def run_gui(cfg, base, in_path):
 # ---------- 主流程 ----------
 
 def main():
+    global FALLBACKS
     cfg = load_config()
+    FALLBACKS = parse_fallbacks(cfg.get("field_fallbacks", ""))
     base = app_dir()
     cli_in, preview, cli, opts = cli_input_and_preview()
     in_path = abs_path(base, cli_in or cfg["input_xlsx"])
